@@ -1,0 +1,11 @@
+[package]
+name = "sonant"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "sonant"
+# crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clack-plugin = { git = "https://github.com/prokopyl/clack.git", package = "clack-plugin" }
