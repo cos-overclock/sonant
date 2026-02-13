@@ -44,9 +44,7 @@ impl AnthropicProvider {
                 )
             })?;
         let api_base_url = read_env_var(ENV_BASE_URL)?.unwrap_or_else(|| DEFAULT_BASE_URL.into());
-        let timeout = read_timeout_from_env(ENV_TIMEOUT_SECS)?
-            .or(read_timeout_from_env(ENV_GLOBAL_TIMEOUT_SECS)?)
-            .unwrap_or(DEFAULT_TIMEOUT);
+        let timeout = resolve_timeout_from_env()?;
         Self::with_config(api_key, api_base_url, timeout)
     }
 
@@ -397,14 +395,39 @@ fn read_timeout_from_env(name: &str) -> Result<Option<Duration>, LlmError> {
     Ok(Some(parse_timeout_seconds(name, &value)?))
 }
 
+fn resolve_timeout_from_env() -> Result<Duration, LlmError> {
+    let provider_timeout = read_timeout_from_env(ENV_TIMEOUT_SECS)?;
+    resolve_timeout_with_global_fallback(provider_timeout, || {
+        read_timeout_from_env(ENV_GLOBAL_TIMEOUT_SECS)
+    })
+}
+
+fn resolve_timeout_with_global_fallback<F>(
+    provider_timeout: Option<Duration>,
+    read_global_timeout: F,
+) -> Result<Duration, LlmError>
+where
+    F: FnOnce() -> Result<Option<Duration>, LlmError>,
+{
+    if let Some(timeout) = provider_timeout {
+        return Ok(timeout);
+    }
+
+    Ok(read_global_timeout()?.unwrap_or(DEFAULT_TIMEOUT))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AnthropicProvider, map_http_error, parse_timeout_seconds};
+    use super::{
+        AnthropicProvider, map_http_error, parse_timeout_seconds,
+        resolve_timeout_with_global_fallback,
+    };
     use crate::domain::{
         GenerationMode, GenerationParams, GenerationRequest, LlmError, MidiReferenceSummary,
         ModelRef, ReferenceSource,
     };
     use reqwest::StatusCode;
+    use std::cell::Cell;
     use std::time::Duration;
 
     fn provider() -> AnthropicProvider {
@@ -609,5 +632,28 @@ mod tests {
             LlmError::Validation { message }
             if message == "TEST_TIMEOUT must be a positive integer in seconds"
         ));
+    }
+
+    #[test]
+    fn resolve_timeout_with_global_fallback_is_lazy_for_provider_timeout() {
+        let global_called = Cell::new(false);
+
+        let timeout = resolve_timeout_with_global_fallback(Some(Duration::from_secs(5)), || {
+            global_called.set(true);
+            Err(LlmError::validation("global timeout should not be parsed"))
+        })
+        .expect("provider-specific timeout should short-circuit global fallback");
+
+        assert_eq!(timeout, Duration::from_secs(5));
+        assert!(!global_called.get());
+    }
+
+    #[test]
+    fn resolve_timeout_with_global_fallback_uses_global_when_provider_absent() {
+        let timeout =
+            resolve_timeout_with_global_fallback(None, || Ok(Some(Duration::from_secs(11))))
+                .expect("global timeout should be used when provider timeout is absent");
+
+        assert_eq!(timeout, Duration::from_secs(11));
     }
 }

@@ -67,9 +67,7 @@ impl OpenAiCompatibleProvider {
             Some(value) => parse_supported_models(&value)?,
             None => default_supported_models(),
         };
-        let timeout = read_timeout_from_env(ENV_TIMEOUT_SECS)?
-            .or(read_timeout_from_env(ENV_GLOBAL_TIMEOUT_SECS)?)
-            .unwrap_or(DEFAULT_TIMEOUT);
+        let timeout = resolve_timeout_from_env()?;
 
         let mut provider = Self::with_config(
             provider_id,
@@ -614,6 +612,27 @@ fn read_timeout_from_env(name: &str) -> Result<Option<Duration>, LlmError> {
     Ok(Some(parse_timeout_seconds(name, &value)?))
 }
 
+fn resolve_timeout_from_env() -> Result<Duration, LlmError> {
+    let provider_timeout = read_timeout_from_env(ENV_TIMEOUT_SECS)?;
+    resolve_timeout_with_global_fallback(provider_timeout, || {
+        read_timeout_from_env(ENV_GLOBAL_TIMEOUT_SECS)
+    })
+}
+
+fn resolve_timeout_with_global_fallback<F>(
+    provider_timeout: Option<Duration>,
+    read_global_timeout: F,
+) -> Result<Duration, LlmError>
+where
+    F: FnOnce() -> Result<Option<Duration>, LlmError>,
+{
+    if let Some(timeout) = provider_timeout {
+        return Ok(timeout);
+    }
+
+    Ok(read_global_timeout()?.unwrap_or(DEFAULT_TIMEOUT))
+}
+
 fn read_env_var(name: &str) -> Result<Option<String>, LlmError> {
     match std::env::var(name) {
         Ok(value) => Ok(Some(value)),
@@ -659,6 +678,7 @@ fn build_v1_url(api_base_url: &str, endpoint_path: &str) -> String {
 mod tests {
     use super::{
         OpenAiCompatibleProvider, build_v1_url, map_http_error, parse_bool, parse_timeout_seconds,
+        resolve_timeout_with_global_fallback,
     };
     use crate::domain::{
         GenerationMode, GenerationParams, GenerationRequest, LlmError, MidiReferenceSummary,
@@ -666,6 +686,7 @@ mod tests {
     };
     use crate::infra::llm::LlmProvider;
     use reqwest::StatusCode;
+    use std::cell::Cell;
     use std::time::Duration;
 
     fn provider() -> OpenAiCompatibleProvider {
@@ -939,5 +960,28 @@ mod tests {
             LlmError::Validation { message }
             if message == "TEST_TIMEOUT must be a positive integer in seconds"
         ));
+    }
+
+    #[test]
+    fn resolve_timeout_with_global_fallback_is_lazy_for_provider_timeout() {
+        let global_called = Cell::new(false);
+
+        let timeout = resolve_timeout_with_global_fallback(Some(Duration::from_secs(3)), || {
+            global_called.set(true);
+            Err(LlmError::validation("global timeout should not be parsed"))
+        })
+        .expect("provider-specific timeout should short-circuit global fallback");
+
+        assert_eq!(timeout, Duration::from_secs(3));
+        assert!(!global_called.get());
+    }
+
+    #[test]
+    fn resolve_timeout_with_global_fallback_uses_global_when_provider_absent() {
+        let timeout =
+            resolve_timeout_with_global_fallback(None, || Ok(Some(Duration::from_secs(9))))
+                .expect("global timeout should be used when provider timeout is absent");
+
+        assert_eq!(timeout, Duration::from_secs(9));
     }
 }
