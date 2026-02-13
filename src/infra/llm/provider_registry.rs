@@ -78,8 +78,8 @@ impl ProviderRegistry {
 mod tests {
     use super::ProviderRegistry;
     use crate::domain::{
-        GeneratedNote, GenerationCandidate, GenerationMode, GenerationParams, GenerationRequest,
-        GenerationResult, LlmError, ModelRef,
+        GeneratedNote, GenerationCandidate, GenerationMetadata, GenerationMode, GenerationParams,
+        GenerationRequest, GenerationResult, LlmError, ModelRef,
     };
     use crate::infra::llm::LlmProvider;
 
@@ -113,6 +113,7 @@ mod tests {
                     }],
                     score_hint: Some(0.9),
                 }],
+                metadata: GenerationMetadata::default(),
             })
         }
     }
@@ -241,9 +242,10 @@ mod tests {
     fn resolve_rejects_empty_provider_id() {
         let registry = ProviderRegistry::new();
 
-        let error = registry
-            .resolve("", "gpt-4.1")
-            .expect_err("empty provider_id should fail resolution");
+        let error = match registry.resolve("", "gpt-4.1") {
+            Ok(_) => panic!("empty provider_id should fail resolution"),
+            Err(error) => error,
+        };
 
         assert!(matches!(error, LlmError::Validation { .. }));
     }
@@ -258,9 +260,10 @@ mod tests {
             })
             .expect("provider registration should succeed");
 
-        let error = registry
-            .resolve("openai", "")
-            .expect_err("empty model_id should fail resolution");
+        let error = match registry.resolve("openai", "") {
+            Ok(_) => panic!("empty model_id should fail resolution"),
+            Err(error) => error,
+        };
 
         assert!(matches!(error, LlmError::Validation { .. }));
     }
@@ -287,14 +290,16 @@ mod tests {
             })
             .expect("provider registration should succeed");
 
-        let error = registry
-            .resolve("   ", "gpt-4.1")
-            .expect_err("whitespace-only provider_id should fail resolution");
+        let error = match registry.resolve("   ", "gpt-4.1") {
+            Ok(_) => panic!("whitespace-only provider_id should fail resolution"),
+            Err(error) => error,
+        };
         assert!(matches!(error, LlmError::Validation { .. }));
 
-        let error = registry
-            .resolve("openai", "   ")
-            .expect_err("whitespace-only model_id should fail resolution");
+        let error = match registry.resolve("openai", "   ") {
+            Ok(_) => panic!("whitespace-only model_id should fail resolution"),
+            Err(error) => error,
+        };
         assert!(matches!(error, LlmError::Validation { .. }));
     }
 }
