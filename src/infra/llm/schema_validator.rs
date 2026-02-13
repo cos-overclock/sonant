@@ -46,7 +46,7 @@ pub const GENERATION_RESULT_JSON_SCHEMA: &str = r#"
             "minimum": 1
           },
           "score_hint": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0.0,
             "maximum": 1.0
           },
