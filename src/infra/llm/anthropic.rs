@@ -114,17 +114,19 @@ impl AnthropicProvider {
                 LlmError::invalid_response(format!("Anthropic response decode failed: {err}"))
             })?;
 
-        let text_block = response
+        let joined_text = response
             .content
             .iter()
-            .find_map(AnthropicContentBlock::as_text)
-            .ok_or_else(|| {
-                LlmError::invalid_response(
-                    "Anthropic response did not include a text content block",
-                )
-            })?;
+            .filter_map(AnthropicContentBlock::as_text)
+            .collect::<Vec<_>>()
+            .join("");
+        if joined_text.trim().is_empty() {
+            return Err(LlmError::invalid_response(
+                "Anthropic response did not include a text content block",
+            ));
+        }
 
-        let json_payload = extract_json_payload(text_block).ok_or_else(|| {
+        let json_payload = extract_json_payload(&joined_text).ok_or_else(|| {
             LlmError::invalid_response("Anthropic text block did not include a JSON object")
         })?;
         let mut result = self.schema_validator.validate_response_json(json_payload)?;
@@ -503,6 +505,36 @@ mod tests {
                 .and_then(|usage| usage.total_tokens),
             Some(145)
         );
+    }
+
+    #[test]
+    fn map_success_response_accepts_json_split_across_multiple_text_blocks() {
+        let response = r#"{
+          "id": "msg_01",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"request_id\":\"req-42\",\"model\":{\"provider\":\"anthropic\",\"model\":\"claude-3-5-sonnet\"},\"candidates\":["
+            },
+            {
+              "type": "text",
+              "text": "{\"id\":\"cand-1\",\"bars\":4,\"notes\":[{\"pitch\":60,\"start_tick\":0,\"duration_tick\":240,\"velocity\":96}]}"
+            },
+            {
+              "type": "text",
+              "text": "]}"
+            }
+          ]
+        }"#;
+
+        let result = provider()
+            .map_success_response(&request(), response, 25, None)
+            .expect("split text blocks should still parse");
+
+        assert_eq!(result.request_id, "req-42");
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].id, "cand-1");
+        assert_eq!(result.metadata.latency_ms, Some(25));
     }
 
     #[test]
