@@ -186,6 +186,12 @@ struct RunningJob {
     job_id: u64,
     request_id: String,
     cancel_flag: Arc<AtomicBool>,
+    cancelled_reported: bool,
+}
+
+struct PendingJob {
+    job_id: u64,
+    request: GenerationRequest,
 }
 
 fn worker_loop(
@@ -194,57 +200,46 @@ fn worker_loop(
     command_tx: mpsc::Sender<WorkerMessage>,
     shared: Arc<Mutex<SharedState>>,
 ) {
-    let mut active_job: Option<RunningJob> = None;
+    let mut in_flight: Option<RunningJob> = None;
+    let mut pending_job: Option<PendingJob> = None;
 
     while let Ok(message) = command_rx.recv() {
         match message {
             WorkerMessage::Start { job_id, request } => {
-                if let Some(previous) = active_job.take() {
-                    previous.cancel_flag.store(true, Ordering::SeqCst);
-                    push_update(
-                        &shared,
-                        GenerationJobUpdate::cancelled(previous.job_id, previous.request_id),
-                    );
-                }
-
-                let request_id = request.request_id.clone();
-                let cancel_flag = Arc::new(AtomicBool::new(false));
-                let cancel_for_thread = Arc::clone(&cancel_flag);
-                let tx_for_thread = command_tx.clone();
-                let service_for_thread = service.clone();
-                let request_id_for_thread = request_id.clone();
-
-                thread::spawn(move || {
-                    if cancel_for_thread.load(Ordering::SeqCst) {
-                        let _ = tx_for_thread.send(WorkerMessage::Completion {
-                            job_id,
-                            request_id: request_id_for_thread,
-                            result: Err(LlmError::internal("job cancelled before start")),
-                            cancelled: true,
-                        });
-                        return;
+                if let Some(active) = in_flight.as_mut() {
+                    active.cancel_flag.store(true, Ordering::SeqCst);
+                    if !active.cancelled_reported {
+                        active.cancelled_reported = true;
+                        push_update(
+                            &shared,
+                            GenerationJobUpdate::cancelled(
+                                active.job_id,
+                                active.request_id.clone(),
+                            ),
+                        );
                     }
 
-                    let result = service_for_thread.generate(request);
-                    let cancelled = cancel_for_thread.load(Ordering::SeqCst);
+                    if let Some(previous_pending) =
+                        pending_job.replace(PendingJob { job_id, request })
+                    {
+                        push_update(
+                            &shared,
+                            GenerationJobUpdate::cancelled(
+                                previous_pending.job_id,
+                                previous_pending.request.request_id,
+                            ),
+                        );
+                    }
+                    continue;
+                }
 
-                    let _ = tx_for_thread.send(WorkerMessage::Completion {
-                        job_id,
-                        request_id: request_id_for_thread,
-                        result,
-                        cancelled,
-                    });
-                });
-
-                push_update(
+                in_flight = Some(spawn_generation_job(
+                    &service,
+                    &command_tx,
                     &shared,
-                    GenerationJobUpdate::running(job_id, request_id.clone()),
-                );
-                active_job = Some(RunningJob {
                     job_id,
-                    request_id,
-                    cancel_flag,
-                });
+                    request,
+                ));
             }
             WorkerMessage::Completion {
                 job_id,
@@ -252,7 +247,7 @@ fn worker_loop(
                 result,
                 cancelled,
             } => {
-                let Some(current_job) = active_job.as_ref() else {
+                let Some(current_job) = in_flight.as_ref() else {
                     continue;
                 };
 
@@ -260,48 +255,140 @@ fn worker_loop(
                     continue;
                 }
 
-                active_job = None;
+                let mut finished_job = in_flight
+                    .take()
+                    .expect("in-flight job should exist when completion is processed");
+                let was_cancelled = cancelled
+                    || finished_job.cancel_flag.load(Ordering::SeqCst)
+                    || finished_job.cancelled_reported;
 
-                if cancelled {
-                    push_update(&shared, GenerationJobUpdate::cancelled(job_id, request_id));
-                    continue;
+                if was_cancelled {
+                    if !finished_job.cancelled_reported {
+                        finished_job.cancelled_reported = true;
+                        push_update(&shared, GenerationJobUpdate::cancelled(job_id, request_id));
+                    }
+                } else {
+                    match result {
+                        Ok(result) => {
+                            push_update(
+                                &shared,
+                                GenerationJobUpdate::succeeded(job_id, request_id, result),
+                            );
+                        }
+                        Err(error) => {
+                            push_update(
+                                &shared,
+                                GenerationJobUpdate::failed(job_id, request_id, error),
+                            );
+                        }
+                    }
                 }
 
-                match result {
-                    Ok(result) => {
-                        push_update(
-                            &shared,
-                            GenerationJobUpdate::succeeded(job_id, request_id, result),
-                        );
-                    }
-                    Err(error) => {
-                        push_update(
-                            &shared,
-                            GenerationJobUpdate::failed(job_id, request_id, error),
-                        );
-                    }
+                if let Some(next) = pending_job.take() {
+                    in_flight = Some(spawn_generation_job(
+                        &service,
+                        &command_tx,
+                        &shared,
+                        next.job_id,
+                        next.request,
+                    ));
                 }
             }
             WorkerMessage::CancelActive => {
-                if let Some(job) = active_job.take() {
-                    job.cancel_flag.store(true, Ordering::SeqCst);
+                if let Some(active) = in_flight.as_mut() {
+                    active.cancel_flag.store(true, Ordering::SeqCst);
+                    if !active.cancelled_reported {
+                        active.cancelled_reported = true;
+                        push_update(
+                            &shared,
+                            GenerationJobUpdate::cancelled(
+                                active.job_id,
+                                active.request_id.clone(),
+                            ),
+                        );
+                    }
+                }
+
+                if let Some(next) = pending_job.take() {
                     push_update(
                         &shared,
-                        GenerationJobUpdate::cancelled(job.job_id, job.request_id),
+                        GenerationJobUpdate::cancelled(next.job_id, next.request.request_id),
                     );
                 }
             }
             WorkerMessage::Shutdown => {
-                if let Some(job) = active_job.take() {
-                    job.cancel_flag.store(true, Ordering::SeqCst);
+                if let Some(active) = in_flight.as_mut() {
+                    active.cancel_flag.store(true, Ordering::SeqCst);
+                    if !active.cancelled_reported {
+                        active.cancelled_reported = true;
+                        push_update(
+                            &shared,
+                            GenerationJobUpdate::cancelled(
+                                active.job_id,
+                                active.request_id.clone(),
+                            ),
+                        );
+                    }
+                }
+
+                if let Some(next) = pending_job.take() {
                     push_update(
                         &shared,
-                        GenerationJobUpdate::cancelled(job.job_id, job.request_id),
+                        GenerationJobUpdate::cancelled(next.job_id, next.request.request_id),
                     );
                 }
                 break;
             }
         }
+    }
+}
+
+fn spawn_generation_job(
+    service: &GenerationService,
+    command_tx: &mpsc::Sender<WorkerMessage>,
+    shared: &Arc<Mutex<SharedState>>,
+    job_id: u64,
+    request: GenerationRequest,
+) -> RunningJob {
+    let request_id = request.request_id.clone();
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_for_thread = Arc::clone(&cancel_flag);
+    let tx_for_thread = command_tx.clone();
+    let service_for_thread = service.clone();
+    let request_id_for_thread = request_id.clone();
+
+    thread::spawn(move || {
+        if cancel_for_thread.load(Ordering::SeqCst) {
+            let _ = tx_for_thread.send(WorkerMessage::Completion {
+                job_id,
+                request_id: request_id_for_thread,
+                result: Err(LlmError::internal("job cancelled before start")),
+                cancelled: true,
+            });
+            return;
+        }
+
+        let result = service_for_thread.generate(request);
+        let cancelled = cancel_for_thread.load(Ordering::SeqCst);
+
+        let _ = tx_for_thread.send(WorkerMessage::Completion {
+            job_id,
+            request_id: request_id_for_thread,
+            result,
+            cancelled,
+        });
+    });
+
+    push_update(
+        shared,
+        GenerationJobUpdate::running(job_id, request_id.clone()),
+    );
+
+    RunningJob {
+        job_id,
+        request_id,
+        cancel_flag,
+        cancelled_reported: false,
     }
 }
 
@@ -317,7 +404,7 @@ fn push_update(shared: &Arc<Mutex<SharedState>>, update: GenerationJobUpdate) {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -387,6 +474,58 @@ mod tests {
                 .lock()
                 .expect("release channel lock poisoned")
                 .recv();
+            Ok(valid_result(&request.request_id))
+        }
+    }
+
+    struct ConcurrencyTrackingProvider {
+        call_delay: Duration,
+        active_calls: AtomicUsize,
+        max_concurrent_calls: AtomicUsize,
+        total_calls: AtomicUsize,
+    }
+
+    impl ConcurrencyTrackingProvider {
+        fn new(call_delay: Duration) -> Self {
+            Self {
+                call_delay,
+                active_calls: AtomicUsize::new(0),
+                max_concurrent_calls: AtomicUsize::new(0),
+                total_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl LlmProvider for ConcurrencyTrackingProvider {
+        fn provider_id(&self) -> &str {
+            "anthropic"
+        }
+
+        fn supports_model(&self, model_id: &str) -> bool {
+            model_id == "claude-3-5-sonnet"
+        }
+
+        fn generate(&self, request: &GenerationRequest) -> Result<GenerationResult, LlmError> {
+            self.total_calls.fetch_add(1, Ordering::SeqCst);
+            let current = self.active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+
+            loop {
+                let max_seen = self.max_concurrent_calls.load(Ordering::SeqCst);
+                if current <= max_seen {
+                    break;
+                }
+                if self
+                    .max_concurrent_calls
+                    .compare_exchange(max_seen, current, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+
+            thread::sleep(self.call_delay);
+            self.active_calls.fetch_sub(1, Ordering::SeqCst);
+
             Ok(valid_result(&request.request_id))
         }
     }
@@ -667,5 +806,68 @@ mod tests {
         assert_eq!(latest.job_id, job_id);
         assert_eq!(latest.request_id, "req-cancel");
         assert_eq!(latest.state, GenerationJobState::Cancelled);
+    }
+
+    #[test]
+    fn retriggered_generates_do_not_run_provider_calls_in_parallel() {
+        let provider = Arc::new(ConcurrencyTrackingProvider::new(Duration::from_millis(120)));
+        let manager = manager_with_provider(provider.clone());
+
+        let first_job = manager
+            .submit_generate(valid_request("req-1"))
+            .expect("first submit should succeed");
+        thread::sleep(Duration::from_millis(10));
+        let second_job = manager
+            .submit_generate(valid_request("req-2"))
+            .expect("second submit should succeed");
+        thread::sleep(Duration::from_millis(10));
+        let third_job = manager
+            .submit_generate(valid_request("req-3"))
+            .expect("third submit should succeed");
+
+        assert!(second_job > first_job);
+        assert!(third_job > second_job);
+
+        wait_for(
+            &manager,
+            |state| state == GenerationJobState::Succeeded,
+            Duration::from_millis(1500),
+        );
+
+        thread::sleep(Duration::from_millis(200));
+
+        let latest = manager
+            .latest_update()
+            .expect("latest update should be available");
+        assert_eq!(latest.state, GenerationJobState::Succeeded);
+        assert_eq!(latest.request_id, "req-3");
+        assert_eq!(
+            latest
+                .result
+                .as_ref()
+                .expect("successful update should carry result")
+                .request_id,
+            "req-3"
+        );
+
+        assert_eq!(provider.max_concurrent_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.total_calls.load(Ordering::SeqCst), 2);
+
+        let updates = manager.drain_updates();
+        assert!(updates.iter().any(|update| {
+            update.job_id == first_job
+                && update.request_id == "req-1"
+                && update.state == GenerationJobState::Cancelled
+        }));
+        assert!(updates.iter().any(|update| {
+            update.job_id == second_job
+                && update.request_id == "req-2"
+                && update.state == GenerationJobState::Cancelled
+        }));
+        assert!(updates.iter().any(|update| {
+            update.job_id == third_job
+                && update.request_id == "req-3"
+                && update.state == GenerationJobState::Succeeded
+        }));
     }
 }
