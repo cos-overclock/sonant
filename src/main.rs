@@ -54,6 +54,8 @@ const PROMPT_VALIDATION_MESSAGE: &str = "Prompt must not be empty.";
 const STUB_PROVIDER_NOTICE: &str = "No LLM provider is configured. Set SONANT_ANTHROPIC_API_KEY or SONANT_OPENAI_COMPAT_API_KEY to enable real generation requests.";
 const TEST_API_KEY_BACKEND_NOTICE: &str = "Using API key from helper input for Anthropic backend.";
 const API_KEY_PLACEHOLDER: &str = "Anthropic API key (testing only)";
+const DEBUG_PROMPT_LOG_ENV: &str = "SONANT_HELPER_DEBUG_PROMPT_LOG";
+const DEBUG_PROMPT_PREVIEW_CHARS: usize = 120;
 
 fn main() {
     let is_helper = std::env::args().any(|arg| arg == "--gpui-helper");
@@ -227,10 +229,7 @@ impl SonantMainWindow {
             request_id: request.request_id.clone(),
         };
 
-        eprintln!(
-            "sonant-helper: submitting request_id={} prompt={:?}",
-            request.request_id, request.prompt
-        );
+        log_generation_request_submission(&request);
 
         if let Err(error) = self.generation_job_manager.submit_generate(request) {
             self.generation_status = HelperGenerationStatus::Failed {
@@ -690,6 +689,45 @@ fn validate_prompt_input(prompt: &str) -> Result<(), LlmError> {
     Ok(())
 }
 
+fn log_generation_request_submission(request: &GenerationRequest) {
+    let prompt_chars = request.prompt.chars().count();
+    if helper_debug_prompt_log_enabled() {
+        let preview = prompt_preview(&request.prompt, DEBUG_PROMPT_PREVIEW_CHARS);
+        eprintln!(
+            "sonant-helper: submitting request_id={} prompt_chars={} prompt_preview={:?}",
+            request.request_id, prompt_chars, preview
+        );
+    } else {
+        eprintln!(
+            "sonant-helper: submitting request_id={} prompt_chars={}",
+            request.request_id, prompt_chars
+        );
+    }
+}
+
+fn helper_debug_prompt_log_enabled() -> bool {
+    std::env::var(DEBUG_PROMPT_LOG_ENV)
+        .ok()
+        .as_deref()
+        .is_some_and(parse_truthy_flag)
+}
+
+fn parse_truthy_flag(raw: &str) -> bool {
+    raw.eq_ignore_ascii_case("1")
+        || raw.eq_ignore_ascii_case("true")
+        || raw.eq_ignore_ascii_case("yes")
+        || raw.eq_ignore_ascii_case("on")
+}
+
+fn prompt_preview(prompt: &str, max_chars: usize) -> String {
+    let mut chars = prompt.chars();
+    let mut preview: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        preview.push_str("...");
+    }
+    preview
+}
+
 fn normalize_api_key_input(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -703,7 +741,7 @@ fn normalize_api_key_input(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         PromptSubmissionModel, build_generation_request, normalize_api_key_input,
-        validate_prompt_input,
+        parse_truthy_flag, prompt_preview, validate_prompt_input,
     };
     use sonant::domain::ModelRef;
 
@@ -757,5 +795,21 @@ mod tests {
             Some("sk-test-key".to_string())
         );
         assert_eq!(normalize_api_key_input(" \n\t "), None);
+    }
+
+    #[test]
+    fn parse_truthy_flag_accepts_expected_values() {
+        assert!(parse_truthy_flag("1"));
+        assert!(parse_truthy_flag("true"));
+        assert!(parse_truthy_flag("YES"));
+        assert!(parse_truthy_flag("On"));
+        assert!(!parse_truthy_flag("0"));
+        assert!(!parse_truthy_flag("false"));
+    }
+
+    #[test]
+    fn prompt_preview_truncates_long_prompts() {
+        assert_eq!(prompt_preview("abcdef", 4), "abcd...");
+        assert_eq!(prompt_preview("abc", 4), "abc");
     }
 }
