@@ -219,4 +219,38 @@ mod tests {
 
         assert!(matches!(error, LlmError::InvalidResponse { .. }));
     }
+
+    #[test]
+    fn validate_response_json_rejects_domain_violation_as_invalid_response() {
+        let json = r#"{
+          "request_id": "   ",
+          "model": {
+            "provider": "anthropic",
+            "model": "claude-3-5-sonnet"
+          },
+          "candidates": [
+            {
+              "id": "cand-1",
+              "bars": 4,
+              "notes": [
+                {
+                  "pitch": 60,
+                  "start_tick": 0,
+                  "duration_tick": 240,
+                  "velocity": 96
+                }
+              ]
+            }
+          ]
+        }"#;
+
+        let error = validator()
+            .validate_response_json(json)
+            .expect_err("domain violation must fail");
+
+        assert!(matches!(
+            error,
+            LlmError::InvalidResponse { message } if message == "request_id must not be empty"
+        ));
+    }
 }
