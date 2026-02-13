@@ -2,7 +2,7 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LlmError {
-    #[error("request validation failed: {message}")]
+    #[error("validation failed: {message}")]
     Validation { message: String },
     #[error("provider authentication failed")]
     Auth,
