@@ -392,7 +392,8 @@ fn spawn_generation_job(
             return;
         }
 
-        let result = service_for_thread.generate(request);
+        let result = service_for_thread
+            .generate_with_cancel(request, || cancel_for_thread.load(Ordering::SeqCst));
         let cancelled = cancel_for_thread.load(Ordering::SeqCst);
 
         let _ = tx_for_thread.send(WorkerMessage::Completion {
@@ -797,7 +798,11 @@ mod tests {
     fn failed_job_transitions_to_failed_state() {
         let provider = Arc::new(DelayedProvider {
             delays: Arc::new(Mutex::new(VecDeque::from([Duration::from_millis(5)]))),
-            fail_requests: Arc::new(Mutex::new(vec!["req-fail".to_string()])),
+            fail_requests: Arc::new(Mutex::new(vec![
+                "req-fail".to_string(),
+                "req-fail".to_string(),
+                "req-fail".to_string(),
+            ])),
         });
         let manager = manager_with_provider(provider);
 
@@ -808,7 +813,7 @@ mod tests {
         wait_for(
             &manager,
             |state| state == GenerationJobState::Failed,
-            Duration::from_millis(500),
+            Duration::from_millis(1200),
         );
 
         let latest = manager.latest_update().expect("latest update should exist");

@@ -1,4 +1,5 @@
 mod anthropic;
+mod env;
 mod openai_compatible;
 mod provider;
 mod provider_registry;

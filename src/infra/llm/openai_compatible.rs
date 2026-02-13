@@ -11,6 +11,7 @@ use crate::domain::{
 };
 
 use super::LlmProvider;
+use super::env::{read_env_var, read_timeout_from_env, resolve_timeout_with_global_fallback};
 use super::response_parsing::{extract_json_payload, truncate_message};
 use super::schema_validator::{GENERATION_RESULT_JSON_SCHEMA, LlmResponseSchemaValidator};
 
@@ -23,6 +24,8 @@ const ENV_BASE_URL: &str = "SONANT_OPENAI_COMPAT_BASE_URL";
 const ENV_PROVIDER_ID: &str = "SONANT_OPENAI_COMPAT_PROVIDER_ID";
 const ENV_MODELS: &str = "SONANT_OPENAI_COMPAT_MODELS";
 const ENV_FETCH_MODELS: &str = "SONANT_OPENAI_COMPAT_FETCH_MODELS";
+const ENV_TIMEOUT_SECS: &str = "SONANT_OPENAI_COMPAT_TIMEOUT_SECS";
+const ENV_GLOBAL_TIMEOUT_SECS: &str = "SONANT_LLM_TIMEOUT_SECS";
 
 const DEFAULT_SUPPORTED_MODELS: &[&str] = &["gpt-5.2"];
 
@@ -65,12 +68,18 @@ impl OpenAiCompatibleProvider {
             Some(value) => parse_supported_models(&value)?,
             None => default_supported_models(),
         };
+        let provider_timeout = read_timeout_from_env(ENV_TIMEOUT_SECS)?;
+        let timeout = resolve_timeout_with_global_fallback(
+            provider_timeout,
+            || read_timeout_from_env(ENV_GLOBAL_TIMEOUT_SECS),
+            DEFAULT_TIMEOUT,
+        )?;
 
         let mut provider = Self::with_config(
             provider_id,
             api_key,
             api_base_url,
-            DEFAULT_TIMEOUT,
+            timeout,
             supported_models,
         )?;
 
@@ -588,16 +597,6 @@ fn parse_supported_models(value: &str) -> Result<Vec<String>, LlmError> {
     }
 
     Ok(models)
-}
-
-fn read_env_var(name: &str) -> Result<Option<String>, LlmError> {
-    match std::env::var(name) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error) => Err(LlmError::validation(format!(
-            "{name} could not be read: {error}"
-        ))),
-    }
 }
 
 fn read_bool_env(name: &str) -> Result<bool, LlmError> {

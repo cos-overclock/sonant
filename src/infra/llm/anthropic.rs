@@ -9,6 +9,7 @@ use crate::domain::{
 };
 
 use super::LlmProvider;
+use super::env::{read_env_var, read_timeout_from_env, resolve_timeout_with_global_fallback};
 use super::response_parsing::{extract_json_payload, truncate_message};
 use super::schema_validator::{GENERATION_RESULT_JSON_SCHEMA, LlmResponseSchemaValidator};
 
@@ -17,6 +18,11 @@ const API_VERSION: &str = "2023-06-01";
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(8);
 const DEFAULT_MAX_TOKENS: u16 = 1024;
+const ENV_API_KEY: &str = "SONANT_ANTHROPIC_API_KEY";
+const ENV_API_KEY_FALLBACK: &str = "ANTHROPIC_API_KEY";
+const ENV_BASE_URL: &str = "SONANT_ANTHROPIC_BASE_URL";
+const ENV_TIMEOUT_SECS: &str = "SONANT_ANTHROPIC_TIMEOUT_SECS";
+const ENV_GLOBAL_TIMEOUT_SECS: &str = "SONANT_LLM_TIMEOUT_SECS";
 
 pub struct AnthropicProvider {
     api_key: String,
@@ -31,16 +37,21 @@ impl AnthropicProvider {
     }
 
     pub fn from_env() -> Result<Self, LlmError> {
-        let api_key = std::env::var("SONANT_ANTHROPIC_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .map_err(|_| {
+        let api_key = read_env_var(ENV_API_KEY)?
+            .or(read_env_var(ENV_API_KEY_FALLBACK)?)
+            .ok_or_else(|| {
                 LlmError::validation(
                     "Anthropic API key is missing (set SONANT_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY)",
                 )
             })?;
-        let api_base_url =
-            std::env::var("SONANT_ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.into());
-        Self::with_config(api_key, api_base_url, DEFAULT_TIMEOUT)
+        let api_base_url = read_env_var(ENV_BASE_URL)?.unwrap_or_else(|| DEFAULT_BASE_URL.into());
+        let provider_timeout = read_timeout_from_env(ENV_TIMEOUT_SECS)?;
+        let timeout = resolve_timeout_with_global_fallback(
+            provider_timeout,
+            || read_timeout_from_env(ENV_GLOBAL_TIMEOUT_SECS),
+            DEFAULT_TIMEOUT,
+        )?;
+        Self::with_config(api_key, api_base_url, timeout)
     }
 
     pub fn with_config(
