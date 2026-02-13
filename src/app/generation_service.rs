@@ -203,4 +203,38 @@ mod tests {
         ));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
+
+    /// Test-only provider that always returns an invalid `GenerationResult`.
+    /// This is used to exercise the `result.validate()` error path in `GenerationService::generate`.
+    struct InvalidResultProvider;
+
+    impl crate::infra::llm::Provider for InvalidResultProvider {
+        fn generate(
+            &self,
+            _request: &GenerationRequest,
+        ) -> Result<GenerationResult, LlmError> {
+            // Construct a result that will fail `GenerationResult::validate()`.
+            // Using `Default` assumes that the default value is considered invalid.
+            let invalid_result = GenerationResult::default();
+            Ok(invalid_result)
+        }
+    }
+
+    #[test]
+    fn generate_returns_error_when_result_is_invalid() {
+        let provider = Arc::new(InvalidResultProvider);
+
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register_shared(provider)
+            .expect("provider registration should succeed");
+
+        let service = GenerationService::new(registry);
+
+        let error = service
+            .generate(valid_request())
+            .expect_err("invalid result should fail validation");
+
+        assert!(matches!(error, LlmError::Validation { .. }));
+    }
 }
