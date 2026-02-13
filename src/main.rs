@@ -150,7 +150,7 @@ impl SonantMainWindow {
 
         let backend = build_generation_backend();
 
-        let mut this = Self {
+        Self {
             prompt_input,
             _prompt_input_subscription: prompt_input_subscription,
             api_key_input,
@@ -163,21 +163,7 @@ impl SonantMainWindow {
             active_test_api_key: None,
             startup_notice: backend.startup_notice,
             _update_poll_task: Task::ready(()),
-        };
-
-        this._update_poll_task = cx.spawn_in(window, async move |view, window| {
-            loop {
-                Timer::after(Duration::from_millis(JOB_UPDATE_POLL_INTERVAL_MS)).await;
-                if view
-                    .update_in(window, |view, _window, cx| view.poll_generation_updates(cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-
-        this
+        }
     }
 
     fn on_prompt_input_event(
@@ -250,9 +236,29 @@ impl SonantMainWindow {
             self.generation_status = HelperGenerationStatus::Failed {
                 message: error.user_message(),
             };
+        } else {
+            self.start_update_polling(window, cx);
         }
 
         cx.notify();
+    }
+
+    fn start_update_polling(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._update_poll_task = cx.spawn_in(window, async move |view, window| {
+            loop {
+                Timer::after(Duration::from_millis(JOB_UPDATE_POLL_INTERVAL_MS)).await;
+                let keep_polling = match view
+                    .update_in(window, |view, _window, cx| view.poll_generation_updates(cx))
+                {
+                    Ok(keep_polling) => keep_polling,
+                    Err(_) => break,
+                };
+
+                if !keep_polling {
+                    break;
+                }
+            }
+        });
     }
 
     fn sync_backend_from_api_key_input(&mut self, cx: &mut Context<Self>) -> Result<(), LlmError> {
@@ -285,17 +291,17 @@ impl SonantMainWindow {
         self.startup_notice = backend.startup_notice;
     }
 
-    fn poll_generation_updates(&mut self, cx: &mut Context<Self>) {
+    fn poll_generation_updates(&mut self, cx: &mut Context<Self>) -> bool {
         let updates = self.generation_job_manager.drain_updates();
-        if updates.is_empty() {
-            return;
+        if !updates.is_empty() {
+            for update in updates {
+                self.apply_generation_update(update);
+            }
+
+            cx.notify();
         }
 
-        for update in updates {
-            self.apply_generation_update(update);
-        }
-
-        cx.notify();
+        self.generation_status.is_submitting_or_running()
     }
 
     fn apply_generation_update(&mut self, update: GenerationJobUpdate) {
