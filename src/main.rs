@@ -1,11 +1,22 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use gpui::{
-    App, Application, Bounds, Context, IntoElement, Render, Window, WindowBounds, WindowOptions,
-    div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, Entity, IntoElement, Render, Subscription, Task, Timer,
+    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_component::{
-    Root,
+    Disableable, Root,
     button::{Button, ButtonVariants as _},
+    input::{Input, InputEvent, InputState},
     label::Label,
+};
+use sonant::{
+    app::{GenerationJobManager, GenerationJobState, GenerationJobUpdate, GenerationService},
+    domain::{
+        GenerationMode, GenerationParams, GenerationRequest, GenerationResult, LlmError, ModelRef,
+    },
+    infra::llm::{AnthropicProvider, LlmProvider, OpenAiCompatibleProvider, ProviderRegistry},
 };
 
 #[cfg(target_os = "macos")]
@@ -15,6 +26,32 @@ use cocoa::{
     },
     base::nil,
 };
+
+const HELPER_WINDOW_WIDTH: f32 = 700.0;
+const HELPER_WINDOW_HEIGHT: f32 = 520.0;
+const PROMPT_EDITOR_HEIGHT_PX: f32 = 220.0;
+const PROMPT_EDITOR_ROWS: usize = 8;
+const JOB_UPDATE_POLL_INTERVAL_MS: u64 = 50;
+
+const DEFAULT_BPM: u16 = 120;
+const DEFAULT_DENSITY: u8 = 3;
+const DEFAULT_COMPLEXITY: u8 = 3;
+const DEFAULT_TEMPERATURE: f32 = 0.7;
+const DEFAULT_TOP_P: f32 = 0.9;
+const DEFAULT_MAX_TOKENS: u16 = 512;
+const DEFAULT_VARIATION_COUNT: u8 = 1;
+
+const DEFAULT_ANTHROPIC_MODEL: &str = "claude-3-5-sonnet";
+const DEFAULT_OPENAI_COMPAT_MODEL: &str = "gpt-5.2";
+const GPUI_HELPER_REQUEST_ID_PREFIX: &str = "gpui-helper-req";
+
+const STUB_PROVIDER_ID: &str = "helper_stub";
+const STUB_MODEL_ID: &str = "helper-unconfigured";
+
+const PROMPT_PLACEHOLDER: &str =
+    "Describe what to generate, for example: Bright pop melody in C major with syncopation.";
+const PROMPT_VALIDATION_MESSAGE: &str = "Prompt must not be empty.";
+const STUB_PROVIDER_NOTICE: &str = "No LLM provider is configured. Set SONANT_ANTHROPIC_API_KEY or SONANT_OPENAI_COMPAT_API_KEY to enable real generation requests.";
 
 fn main() {
     let is_helper = std::env::args().any(|arg| arg == "--gpui-helper");
@@ -32,7 +69,11 @@ fn run_gpui_helper() {
         set_plugin_helper_activation_policy();
         gpui_component::init(cx);
 
-        let bounds = Bounds::centered(None, size(px(640.0), px(420.0)), cx);
+        let bounds = Bounds::centered(
+            None,
+            size(px(HELPER_WINDOW_WIDTH), px(HELPER_WINDOW_HEIGHT)),
+            cx,
+        );
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
@@ -40,7 +81,7 @@ fn run_gpui_helper() {
 
         if cx
             .open_window(options, |window, cx| {
-                let view = cx.new(|_| SonantGpuiPocView);
+                let view = cx.new(|cx| SonantMainWindow::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             })
             .is_err()
@@ -72,30 +113,524 @@ fn set_plugin_helper_activation_policy() {
 #[cfg(not(target_os = "macos"))]
 fn set_plugin_helper_activation_policy() {}
 
-struct SonantGpuiPocView;
+struct SonantMainWindow {
+    prompt_input: Entity<InputState>,
+    _prompt_input_subscription: Subscription,
+    generation_job_manager: Arc<GenerationJobManager>,
+    submission_model: PromptSubmissionModel,
+    generation_status: HelperGenerationStatus,
+    validation_error: Option<String>,
+    startup_notice: Option<String>,
+    _update_poll_task: Task<()>,
+}
 
-impl Render for SonantGpuiPocView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+impl SonantMainWindow {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let prompt_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .rows(PROMPT_EDITOR_ROWS)
+                .placeholder(PROMPT_PLACEHOLDER)
+        });
+        let prompt_input_subscription =
+            cx.subscribe_in(&prompt_input, window, Self::on_prompt_input_event);
+
+        let backend = build_generation_backend();
+
+        let mut this = Self {
+            prompt_input,
+            _prompt_input_subscription: prompt_input_subscription,
+            generation_job_manager: Arc::clone(&backend.job_manager),
+            submission_model: PromptSubmissionModel::new(backend.default_model),
+            generation_status: HelperGenerationStatus::Idle,
+            validation_error: None,
+            startup_notice: backend.startup_notice,
+            _update_poll_task: Task::ready(()),
+        };
+
+        this._update_poll_task = cx.spawn_in(window, async move |view, window| {
+            loop {
+                Timer::after(Duration::from_millis(JOB_UPDATE_POLL_INTERVAL_MS)).await;
+                if view
+                    .update_in(window, |view, _window, cx| view.poll_generation_updates(cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        this
+    }
+
+    fn on_prompt_input_event(
+        &mut self,
+        _state: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change) && self.validation_error.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn on_generate_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.validation_error = None;
+
+        let prompt = self.prompt_input.read(cx).value().to_string();
+        let request = match self.submission_model.prepare_request(prompt) {
+            Ok(request) => request,
+            Err(LlmError::Validation { .. }) => {
+                self.generation_status = HelperGenerationStatus::Idle;
+                self.validation_error = Some(PROMPT_VALIDATION_MESSAGE.to_string());
+                self.prompt_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+                cx.notify();
+                return;
+            }
+            Err(error) => {
+                self.generation_status = HelperGenerationStatus::Failed {
+                    message: error.user_message(),
+                };
+                cx.notify();
+                return;
+            }
+        };
+
+        self.generation_status = HelperGenerationStatus::Submitting {
+            request_id: request.request_id.clone(),
+        };
+
+        eprintln!(
+            "sonant-helper: submitting request_id={} prompt={:?}",
+            request.request_id, request.prompt
+        );
+
+        if let Err(error) = self.generation_job_manager.submit_generate(request) {
+            self.generation_status = HelperGenerationStatus::Failed {
+                message: error.user_message(),
+            };
+        }
+
+        cx.notify();
+    }
+
+    fn poll_generation_updates(&mut self, cx: &mut Context<Self>) {
+        let updates = self.generation_job_manager.drain_updates();
+        if updates.is_empty() {
+            return;
+        }
+
+        for update in updates {
+            self.apply_generation_update(update);
+        }
+
+        cx.notify();
+    }
+
+    fn apply_generation_update(&mut self, update: GenerationJobUpdate) {
+        self.generation_status = match update.state {
+            GenerationJobState::Idle => HelperGenerationStatus::Idle,
+            GenerationJobState::Running => HelperGenerationStatus::Running {
+                request_id: update.request_id,
+            },
+            GenerationJobState::Succeeded => {
+                let candidate_count = update
+                    .result
+                    .as_ref()
+                    .map(|result| result.candidates.len())
+                    .unwrap_or(0);
+                HelperGenerationStatus::Succeeded {
+                    request_id: update.request_id,
+                    candidate_count,
+                }
+            }
+            GenerationJobState::Failed => {
+                let message = update
+                    .error
+                    .map(|error| error.user_message())
+                    .unwrap_or_else(|| "Generation failed for an unknown reason.".to_string());
+                HelperGenerationStatus::Failed { message }
+            }
+            GenerationJobState::Cancelled => HelperGenerationStatus::Cancelled {
+                request_id: update.request_id,
+            },
+        };
+    }
+}
+
+impl Render for SonantMainWindow {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status_label = self.generation_status.label();
+        let status_color = self.generation_status.color();
+        let generating = self.generation_status.is_submitting_or_running();
+
         div()
             .size_full()
             .flex()
             .flex_col()
-            .justify_center()
-            .items_center()
             .gap_3()
-            .bg(rgb(0x1f2937))
+            .p_4()
+            .bg(rgb(0x111827))
             .text_color(rgb(0xf9fafb))
-            .child("Sonant CLAP Plugin GPUI PoC")
+            .child(Label::new("Sonant GPUI Helper"))
             .child(Label::new(
-                "gpui + gpui-component helper window (spawned from plugin)",
+                "FR-02: Natural-language prompt input wired to generation job manager.",
             ))
+            .child(Label::new("Prompt"))
+            .child(Input::new(&self.prompt_input).h(px(PROMPT_EDITOR_HEIGHT_PX)))
+            .children(self.validation_error.iter().map(|message| {
+                div()
+                    .text_color(rgb(0xfca5a5))
+                    .child(format!("Validation: {message}"))
+            }))
             .child(
-                Button::new("gpui-component-button")
-                    .primary()
-                    .label("gpui-component Button")
-                    .on_click(|_, _, _| {
-                        eprintln!("sonant-helper: gpui-component button clicked");
-                    }),
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        Button::new("generate-button")
+                            .primary()
+                            .label(if generating {
+                                "Generating..."
+                            } else {
+                                "Generate"
+                            })
+                            .loading(generating)
+                            .disabled(matches!(
+                                self.generation_status,
+                                HelperGenerationStatus::Submitting { .. }
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.on_generate_clicked(window, cx)
+                            })),
+                    )
+                    .child(div().text_color(status_color).child(status_label)),
             )
+            .children(self.startup_notice.iter().map(|notice| {
+                div()
+                    .text_color(rgb(0x93c5fd))
+                    .child(format!("Backend: {notice}"))
+            }))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HelperGenerationStatus {
+    Idle,
+    Submitting {
+        request_id: String,
+    },
+    Running {
+        request_id: String,
+    },
+    Succeeded {
+        request_id: String,
+        candidate_count: usize,
+    },
+    Failed {
+        message: String,
+    },
+    Cancelled {
+        request_id: String,
+    },
+}
+
+impl HelperGenerationStatus {
+    fn label(&self) -> String {
+        match self {
+            Self::Idle => "Idle".to_string(),
+            Self::Submitting { request_id } => format!("Submitting {request_id}..."),
+            Self::Running { request_id } => format!("Running {request_id}..."),
+            Self::Succeeded {
+                request_id,
+                candidate_count,
+            } => {
+                format!("Succeeded {request_id} ({candidate_count} candidate(s))")
+            }
+            Self::Failed { message } => format!("Failed: {message}"),
+            Self::Cancelled { request_id } => format!("Cancelled {request_id}"),
+        }
+    }
+
+    fn color(&self) -> gpui::Hsla {
+        match self {
+            Self::Idle => rgb(0x93c5fd).into(),
+            Self::Submitting { .. } | Self::Running { .. } => rgb(0xfbbf24).into(),
+            Self::Succeeded { .. } => rgb(0x86efac).into(),
+            Self::Failed { .. } => rgb(0xfca5a5).into(),
+            Self::Cancelled { .. } => rgb(0xfcd34d).into(),
+        }
+    }
+
+    fn is_submitting_or_running(&self) -> bool {
+        matches!(self, Self::Submitting { .. } | Self::Running { .. })
+    }
+}
+
+struct GenerationBackend {
+    job_manager: Arc<GenerationJobManager>,
+    default_model: ModelRef,
+    startup_notice: Option<String>,
+}
+
+fn build_generation_backend() -> GenerationBackend {
+    let mut registry = ProviderRegistry::new();
+    let mut default_model = None;
+    let mut notices = Vec::new();
+
+    register_anthropic_provider(&mut registry, &mut default_model, &mut notices);
+    register_openai_compatible_provider(&mut registry, &mut default_model, &mut notices);
+
+    if registry.is_empty() {
+        return build_stub_backend(notices);
+    }
+
+    let service = GenerationService::new(registry);
+    let manager = match GenerationJobManager::new(service) {
+        Ok(manager) => manager,
+        Err(error) => {
+            notices.push(format!(
+                "Failed to start generation worker, switched to stub provider: {}",
+                error.user_message()
+            ));
+            return build_stub_backend(notices);
+        }
+    };
+
+    GenerationBackend {
+        job_manager: Arc::new(manager),
+        default_model: default_model
+            .expect("default model must be configured when at least one provider exists"),
+        startup_notice: (!notices.is_empty()).then(|| notices.join(" ")),
+    }
+}
+
+fn register_anthropic_provider(
+    registry: &mut ProviderRegistry,
+    default_model: &mut Option<ModelRef>,
+    notices: &mut Vec<String>,
+) {
+    match AnthropicProvider::from_env() {
+        Ok(provider) => {
+            if let Err(error) = registry.register(provider) {
+                notices.push(format!(
+                    "Anthropic provider could not be registered: {}",
+                    error.user_message()
+                ));
+                return;
+            }
+
+            if default_model.is_none() {
+                *default_model = Some(ModelRef {
+                    provider: "anthropic".to_string(),
+                    model: DEFAULT_ANTHROPIC_MODEL.to_string(),
+                });
+            }
+        }
+        Err(error) if !is_missing_credentials_error(&error) => {
+            notices.push(format!(
+                "Anthropic provider is unavailable: {}",
+                error.user_message()
+            ));
+        }
+        Err(_) => {}
+    }
+}
+
+fn register_openai_compatible_provider(
+    registry: &mut ProviderRegistry,
+    default_model: &mut Option<ModelRef>,
+    notices: &mut Vec<String>,
+) {
+    match OpenAiCompatibleProvider::from_env() {
+        Ok(provider) => {
+            let provider_id = provider.provider_id().to_string();
+            let default_model_id = provider
+                .supported_models()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| DEFAULT_OPENAI_COMPAT_MODEL.to_string());
+
+            if let Err(error) = registry.register(provider) {
+                notices.push(format!(
+                    "OpenAI-compatible provider could not be registered: {}",
+                    error.user_message()
+                ));
+                return;
+            }
+
+            if default_model.is_none() {
+                *default_model = Some(ModelRef {
+                    provider: provider_id,
+                    model: default_model_id,
+                });
+            }
+        }
+        Err(error) if !is_missing_credentials_error(&error) => {
+            notices.push(format!(
+                "OpenAI-compatible provider is unavailable: {}",
+                error.user_message()
+            ));
+        }
+        Err(_) => {}
+    }
+}
+
+fn build_stub_backend(mut notices: Vec<String>) -> GenerationBackend {
+    let mut registry = ProviderRegistry::new();
+    registry
+        .register(HelperUnconfiguredProvider)
+        .expect("stub provider registration should succeed");
+
+    let service = GenerationService::new(registry);
+    let manager = GenerationJobManager::new(service)
+        .expect("stub generation worker should start for helper fallback");
+
+    notices.push(STUB_PROVIDER_NOTICE.to_string());
+
+    GenerationBackend {
+        job_manager: Arc::new(manager),
+        default_model: ModelRef {
+            provider: STUB_PROVIDER_ID.to_string(),
+            model: STUB_MODEL_ID.to_string(),
+        },
+        startup_notice: Some(notices.join(" ")),
+    }
+}
+
+fn is_missing_credentials_error(error: &LlmError) -> bool {
+    matches!(
+        error,
+        LlmError::Validation { message } if message.contains("API key is missing")
+    )
+}
+
+struct HelperUnconfiguredProvider;
+
+impl LlmProvider for HelperUnconfiguredProvider {
+    fn provider_id(&self) -> &str {
+        STUB_PROVIDER_ID
+    }
+
+    fn supports_model(&self, model_id: &str) -> bool {
+        model_id.trim() == STUB_MODEL_ID
+    }
+
+    fn generate(&self, _request: &GenerationRequest) -> Result<GenerationResult, LlmError> {
+        Err(LlmError::validation(STUB_PROVIDER_NOTICE))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PromptSubmissionModel {
+    next_request_number: u64,
+    model: ModelRef,
+}
+
+impl PromptSubmissionModel {
+    fn new(model: ModelRef) -> Self {
+        Self {
+            next_request_number: 1,
+            model,
+        }
+    }
+
+    fn prepare_request(&mut self, prompt: String) -> Result<GenerationRequest, LlmError> {
+        let request_id = format!(
+            "{GPUI_HELPER_REQUEST_ID_PREFIX}-{}",
+            self.next_request_number
+        );
+        self.next_request_number = self.next_request_number.saturating_add(1);
+        build_generation_request(request_id, self.model.clone(), prompt)
+    }
+}
+
+fn build_generation_request(
+    request_id: String,
+    model: ModelRef,
+    prompt: String,
+) -> Result<GenerationRequest, LlmError> {
+    validate_prompt_input(&prompt)?;
+
+    let request = GenerationRequest {
+        request_id,
+        model,
+        mode: GenerationMode::Melody,
+        prompt,
+        params: GenerationParams {
+            bpm: DEFAULT_BPM,
+            key: "C".to_string(),
+            scale: "major".to_string(),
+            density: DEFAULT_DENSITY,
+            complexity: DEFAULT_COMPLEXITY,
+            temperature: Some(DEFAULT_TEMPERATURE),
+            top_p: Some(DEFAULT_TOP_P),
+            max_tokens: Some(DEFAULT_MAX_TOKENS),
+        },
+        references: Vec::new(),
+        variation_count: DEFAULT_VARIATION_COUNT,
+    };
+
+    request.validate()?;
+    Ok(request)
+}
+
+fn validate_prompt_input(prompt: &str) -> Result<(), LlmError> {
+    if prompt.trim().is_empty() {
+        return Err(LlmError::validation("prompt must not be empty"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PromptSubmissionModel, build_generation_request, validate_prompt_input};
+    use sonant::domain::ModelRef;
+
+    fn test_model() -> ModelRef {
+        ModelRef {
+            provider: "anthropic".to_string(),
+            model: "claude-3-5-sonnet".to_string(),
+        }
+    }
+
+    #[test]
+    fn validate_prompt_input_rejects_empty_input() {
+        assert!(validate_prompt_input("").is_err());
+    }
+
+    #[test]
+    fn validate_prompt_input_rejects_whitespace_only_input() {
+        assert!(validate_prompt_input(" \n\t   ").is_err());
+    }
+
+    #[test]
+    fn build_generation_request_reflects_prompt_text() {
+        let prompt = "  warm synth melody with syncopation  ".to_string();
+        let request = build_generation_request("req-1".to_string(), test_model(), prompt.clone())
+            .expect("request should be built for non-empty prompt");
+
+        assert_eq!(request.prompt, prompt);
+    }
+
+    #[test]
+    fn submission_model_prepares_requests_with_incrementing_ids() {
+        let mut model = PromptSubmissionModel::new(test_model());
+
+        let first = model
+            .prepare_request("first prompt".to_string())
+            .expect("first prompt should be accepted");
+        let second = model
+            .prepare_request("second prompt".to_string())
+            .expect("second prompt should be accepted");
+
+        assert_eq!(first.request_id, "gpui-helper-req-1");
+        assert_eq!(second.request_id, "gpui-helper-req-2");
+        assert_eq!(first.prompt, "first prompt");
+        assert_eq!(second.prompt, "second prompt");
     }
 }
