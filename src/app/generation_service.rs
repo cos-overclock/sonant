@@ -36,8 +36,8 @@ mod tests {
 
     use super::GenerationService;
     use crate::domain::{
-        GeneratedNote, GenerationCandidate, GenerationMode, GenerationParams, GenerationRequest,
-        GenerationResult, LlmError, ModelRef,
+        GeneratedNote, GenerationCandidate, GenerationMetadata, GenerationMode, GenerationParams,
+        GenerationRequest, GenerationResult, LlmError, ModelRef,
     };
     use crate::infra::llm::{LlmProvider, ProviderRegistry};
 
@@ -75,6 +75,7 @@ mod tests {
                     }],
                     score_hint: Some(0.8),
                 }],
+                metadata: GenerationMetadata::default(),
             })
         }
     }
@@ -208,15 +209,25 @@ mod tests {
     /// This is used to exercise the `result.validate()` error path in `GenerationService::generate`.
     struct InvalidResultProvider;
 
-    impl crate::infra::llm::Provider for InvalidResultProvider {
-        fn generate(
-            &self,
-            _request: &GenerationRequest,
-        ) -> Result<GenerationResult, LlmError> {
-            // Construct a result that will fail `GenerationResult::validate()`.
-            // Using `Default` assumes that the default value is considered invalid.
-            let invalid_result = GenerationResult::default();
-            Ok(invalid_result)
+    impl LlmProvider for InvalidResultProvider {
+        fn provider_id(&self) -> &str {
+            "anthropic"
+        }
+
+        fn supports_model(&self, model_id: &str) -> bool {
+            model_id == "claude-3-5-sonnet"
+        }
+
+        fn generate(&self, _request: &GenerationRequest) -> Result<GenerationResult, LlmError> {
+            Ok(GenerationResult {
+                request_id: String::new(),
+                model: ModelRef {
+                    provider: "anthropic".to_string(),
+                    model: "claude-3-5-sonnet".to_string(),
+                },
+                candidates: Vec::new(),
+                metadata: GenerationMetadata::default(),
+            })
         }
     }
 

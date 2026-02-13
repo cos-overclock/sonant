@@ -86,6 +86,50 @@ pub const GENERATION_RESULT_JSON_SCHEMA: &str = r#"
           }
         }
       }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "latency_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "provider_request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stop_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cache_creation_input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cache_read_input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -181,7 +225,17 @@ mod tests {
                 }
               ]
             }
-          ]
+          ],
+          "metadata": {
+            "latency_ms": 321,
+            "provider_request_id": "msg_abc123",
+            "stop_reason": "end_turn",
+            "usage": {
+              "input_tokens": 123,
+              "output_tokens": 45,
+              "total_tokens": 168
+            }
+          }
         }"#;
 
         let result = validator()
@@ -190,6 +244,19 @@ mod tests {
 
         assert_eq!(result.request_id, "req-42");
         assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.metadata.latency_ms, Some(321));
+        assert_eq!(
+            result.metadata.provider_request_id.as_deref(),
+            Some("msg_abc123")
+        );
+        assert_eq!(
+            result
+                .metadata
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.total_tokens),
+            Some(168)
+        );
     }
 
     #[test]
@@ -251,6 +318,44 @@ mod tests {
         assert!(matches!(
             error,
             LlmError::InvalidResponse { message } if message == "request_id must not be empty"
+        ));
+    }
+
+    #[test]
+    fn validate_response_json_rejects_empty_usage_object() {
+        let json = r#"{
+          "request_id": "req-42",
+          "model": {
+            "provider": "anthropic",
+            "model": "claude-3-5-sonnet"
+          },
+          "candidates": [
+            {
+              "id": "cand-1",
+              "bars": 4,
+              "notes": [
+                {
+                  "pitch": 60,
+                  "start_tick": 0,
+                  "duration_tick": 240,
+                  "velocity": 96
+                }
+              ]
+            }
+          ],
+          "metadata": {
+            "usage": {}
+          }
+        }"#;
+
+        let error = validator()
+            .validate_response_json(json)
+            .expect_err("empty usage object must fail");
+
+        assert!(matches!(
+            error,
+            LlmError::InvalidResponse { message }
+            if message == "usage must include at least one token counter"
         ));
     }
 }

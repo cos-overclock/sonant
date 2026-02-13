@@ -73,24 +73,24 @@ impl GenerationParams {
                 self.complexity
             )));
         }
-        if let Some(temperature) = self.temperature {
-            if !(0.0..=2.0).contains(&temperature) {
-                return Err(LlmError::validation(format!(
-                    "temperature must be in 0.0..=2.0 (got {temperature})"
-                )));
-            }
+        if let Some(temperature) = self.temperature
+            && !(0.0..=2.0).contains(&temperature)
+        {
+            return Err(LlmError::validation(format!(
+                "temperature must be in 0.0..=2.0 (got {temperature})"
+            )));
         }
-        if let Some(top_p) = self.top_p {
-            if !(0.0..=1.0).contains(&top_p) {
-                return Err(LlmError::validation(format!(
-                    "top_p must be in 0.0..=1.0 (got {top_p})"
-                )));
-            }
+        if let Some(top_p) = self.top_p
+            && !(0.0..=1.0).contains(&top_p)
+        {
+            return Err(LlmError::validation(format!(
+                "top_p must be in 0.0..=1.0 (got {top_p})"
+            )));
         }
-        if let Some(max_tokens) = self.max_tokens {
-            if max_tokens == 0 {
-                return Err(LlmError::validation("max_tokens must be greater than 0"));
-            }
+        if let Some(max_tokens) = self.max_tokens
+            && max_tokens == 0
+        {
+            return Err(LlmError::validation("max_tokens must be greater than 0"));
         }
         Ok(())
     }
@@ -245,15 +245,80 @@ impl GenerationCandidate {
         if self.notes.is_empty() {
             return Err(LlmError::validation("candidate notes must not be empty"));
         }
-        if let Some(score_hint) = self.score_hint {
-            if !(0.0..=1.0).contains(&score_hint) {
-                return Err(LlmError::validation(format!(
-                    "score_hint must be in 0.0..=1.0 (got {score_hint})"
-                )));
-            }
+        if let Some(score_hint) = self.score_hint
+            && !(0.0..=1.0).contains(&score_hint)
+        {
+            return Err(LlmError::validation(format!(
+                "score_hint must be in 0.0..=1.0 (got {score_hint})"
+            )));
         }
         for note in &self.notes {
             note.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct GenerationUsage {
+    #[serde(default)]
+    pub input_tokens: Option<u32>,
+    #[serde(default)]
+    pub output_tokens: Option<u32>,
+    #[serde(default)]
+    pub total_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
+}
+
+impl GenerationUsage {
+    pub fn validate(&self) -> Result<(), LlmError> {
+        let has_usage = self.input_tokens.is_some()
+            || self.output_tokens.is_some()
+            || self.total_tokens.is_some()
+            || self.cache_creation_input_tokens.is_some()
+            || self.cache_read_input_tokens.is_some();
+        if !has_usage {
+            return Err(LlmError::validation(
+                "usage must include at least one token counter",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct GenerationMetadata {
+    #[serde(default)]
+    pub latency_ms: Option<u64>,
+    #[serde(default)]
+    pub provider_request_id: Option<String>,
+    #[serde(default)]
+    pub stop_reason: Option<String>,
+    #[serde(default)]
+    pub usage: Option<GenerationUsage>,
+}
+
+impl GenerationMetadata {
+    pub fn validate(&self) -> Result<(), LlmError> {
+        if let Some(provider_request_id) = &self.provider_request_id
+            && provider_request_id.trim().is_empty()
+        {
+            return Err(LlmError::validation(
+                "metadata.provider_request_id must not be empty when provided",
+            ));
+        }
+        if let Some(stop_reason) = &self.stop_reason
+            && stop_reason.trim().is_empty()
+        {
+            return Err(LlmError::validation(
+                "metadata.stop_reason must not be empty when provided",
+            ));
+        }
+        if let Some(usage) = &self.usage {
+            usage.validate()?;
         }
         Ok(())
     }
@@ -264,6 +329,8 @@ pub struct GenerationResult {
     pub request_id: String,
     pub model: ModelRef,
     pub candidates: Vec<GenerationCandidate>,
+    #[serde(default)]
+    pub metadata: GenerationMetadata,
 }
 
 impl GenerationResult {
@@ -278,6 +345,7 @@ impl GenerationResult {
         for candidate in &self.candidates {
             candidate.validate()?;
         }
+        self.metadata.validate()?;
         Ok(())
     }
 }
@@ -348,6 +416,39 @@ mod tests {
             request.validate(),
             Err(LlmError::Validation { message })
             if message == "continuation mode requires at least one MIDI reference"
+        ));
+    }
+
+    #[test]
+    fn result_validation_rejects_empty_provider_request_id_metadata() {
+        let result = GenerationResult {
+            request_id: "req-1".to_string(),
+            model: ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-3-5-sonnet".to_string(),
+            },
+            candidates: vec![GenerationCandidate {
+                id: "cand-1".to_string(),
+                bars: 4,
+                notes: vec![GeneratedNote {
+                    pitch: 60,
+                    start_tick: 0,
+                    duration_tick: 120,
+                    velocity: 100,
+                    channel: 1,
+                }],
+                score_hint: Some(0.8),
+            }],
+            metadata: GenerationMetadata {
+                provider_request_id: Some("  ".to_string()),
+                ..GenerationMetadata::default()
+            },
+        };
+
+        assert!(matches!(
+            result.validate(),
+            Err(LlmError::Validation { message })
+            if message == "metadata.provider_request_id must not be empty when provided"
         ));
     }
 }
