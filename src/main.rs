@@ -52,6 +52,8 @@ const PROMPT_PLACEHOLDER: &str =
     "Describe what to generate, for example: Bright pop melody in C major with syncopation.";
 const PROMPT_VALIDATION_MESSAGE: &str = "Prompt must not be empty.";
 const STUB_PROVIDER_NOTICE: &str = "No LLM provider is configured. Set SONANT_ANTHROPIC_API_KEY or SONANT_OPENAI_COMPAT_API_KEY to enable real generation requests.";
+const TEST_API_KEY_BACKEND_NOTICE: &str = "Using API key from helper input for Anthropic backend.";
+const API_KEY_PLACEHOLDER: &str = "Anthropic API key (testing only)";
 
 fn main() {
     let is_helper = std::env::args().any(|arg| arg == "--gpui-helper");
@@ -116,10 +118,14 @@ fn set_plugin_helper_activation_policy() {}
 struct SonantMainWindow {
     prompt_input: Entity<InputState>,
     _prompt_input_subscription: Subscription,
+    api_key_input: Entity<InputState>,
+    _api_key_input_subscription: Subscription,
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
+    api_key_error: Option<String>,
+    active_test_api_key: Option<String>,
     startup_notice: Option<String>,
     _update_poll_task: Task<()>,
 }
@@ -134,16 +140,27 @@ impl SonantMainWindow {
         });
         let prompt_input_subscription =
             cx.subscribe_in(&prompt_input, window, Self::on_prompt_input_event);
+        let api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(API_KEY_PLACEHOLDER)
+                .masked(true)
+        });
+        let api_key_input_subscription =
+            cx.subscribe_in(&api_key_input, window, Self::on_api_key_input_event);
 
         let backend = build_generation_backend();
 
         let mut this = Self {
             prompt_input,
             _prompt_input_subscription: prompt_input_subscription,
+            api_key_input,
+            _api_key_input_subscription: api_key_input_subscription,
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
+            api_key_error: None,
+            active_test_api_key: None,
             startup_notice: backend.startup_notice,
             _update_poll_task: Task::ready(()),
         };
@@ -175,8 +192,30 @@ impl SonantMainWindow {
         }
     }
 
+    fn on_api_key_input_event(
+        &mut self,
+        _state: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change) && self.api_key_error.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn on_generate_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.validation_error = None;
+        self.api_key_error = None;
+
+        if let Err(error) = self.sync_backend_from_api_key_input(cx) {
+            self.generation_status = HelperGenerationStatus::Failed {
+                message: error.user_message(),
+            };
+            self.api_key_error = Some(error.user_message());
+            cx.notify();
+            return;
+        }
 
         let prompt = self.prompt_input.read(cx).value().to_string();
         let request = match self.submission_model.prepare_request(prompt) {
@@ -214,6 +253,36 @@ impl SonantMainWindow {
         }
 
         cx.notify();
+    }
+
+    fn sync_backend_from_api_key_input(&mut self, cx: &mut Context<Self>) -> Result<(), LlmError> {
+        let current_input = self.api_key_input_value(cx);
+
+        match current_input {
+            Some(ref api_key) if self.active_test_api_key.as_deref() != Some(api_key) => {
+                let backend = build_generation_backend_from_api_key(api_key)?;
+                self.apply_generation_backend(backend);
+                self.active_test_api_key = Some(api_key.clone());
+            }
+            None if self.active_test_api_key.take().is_some() => {
+                let backend = build_generation_backend();
+                self.apply_generation_backend(backend);
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn api_key_input_value(&self, cx: &App) -> Option<String> {
+        let value = self.api_key_input.read(cx).value();
+        normalize_api_key_input(value.as_ref())
+    }
+
+    fn apply_generation_backend(&mut self, backend: GenerationBackend) {
+        self.generation_job_manager = Arc::clone(&backend.job_manager);
+        self.submission_model.set_model(backend.default_model);
+        self.startup_notice = backend.startup_notice;
     }
 
     fn poll_generation_updates(&mut self, cx: &mut Context<Self>) {
@@ -278,6 +347,13 @@ impl Render for SonantMainWindow {
             .child(Label::new(
                 "FR-02: Natural-language prompt input wired to generation job manager.",
             ))
+            .child(Label::new("API Key (testing)"))
+            .child(Input::new(&self.api_key_input).mask_toggle())
+            .children(self.api_key_error.iter().map(|message| {
+                div()
+                    .text_color(rgb(0xfca5a5))
+                    .child(format!("API Key: {message}"))
+            }))
             .child(Label::new("Prompt"))
             .child(Input::new(&self.prompt_input).h(px(PROMPT_EDITOR_HEIGHT_PX)))
             .children(self.validation_error.iter().map(|message| {
@@ -502,6 +578,24 @@ fn build_stub_backend(mut notices: Vec<String>) -> GenerationBackend {
     }
 }
 
+fn build_generation_backend_from_api_key(api_key: &str) -> Result<GenerationBackend, LlmError> {
+    let mut registry = ProviderRegistry::new();
+    let provider = AnthropicProvider::from_api_key(api_key.to_string())?;
+    registry.register(provider)?;
+
+    let service = GenerationService::new(registry);
+    let manager = GenerationJobManager::new(service)?;
+
+    Ok(GenerationBackend {
+        job_manager: Arc::new(manager),
+        default_model: ModelRef {
+            provider: "anthropic".to_string(),
+            model: DEFAULT_ANTHROPIC_MODEL.to_string(),
+        },
+        startup_notice: Some(TEST_API_KEY_BACKEND_NOTICE.to_string()),
+    })
+}
+
 fn is_missing_credentials_error(error: &LlmError) -> bool {
     matches!(
         error,
@@ -547,6 +641,10 @@ impl PromptSubmissionModel {
         self.next_request_number = self.next_request_number.saturating_add(1);
         build_generation_request(request_id, self.model.clone(), prompt)
     }
+
+    fn set_model(&mut self, model: ModelRef) {
+        self.model = model;
+    }
 }
 
 fn build_generation_request(
@@ -586,9 +684,21 @@ fn validate_prompt_input(prompt: &str) -> Result<(), LlmError> {
     Ok(())
 }
 
+fn normalize_api_key_input(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PromptSubmissionModel, build_generation_request, validate_prompt_input};
+    use super::{
+        PromptSubmissionModel, build_generation_request, normalize_api_key_input,
+        validate_prompt_input,
+    };
     use sonant::domain::ModelRef;
 
     fn test_model() -> ModelRef {
@@ -632,5 +742,14 @@ mod tests {
         assert_eq!(second.request_id, "gpui-helper-req-2");
         assert_eq!(first.prompt, "first prompt");
         assert_eq!(second.prompt, "second prompt");
+    }
+
+    #[test]
+    fn normalize_api_key_input_trims_and_rejects_empty() {
+        assert_eq!(
+            normalize_api_key_input("  sk-test-key  "),
+            Some("sk-test-key".to_string())
+        );
+        assert_eq!(normalize_api_key_input(" \n\t "), None);
     }
 }
