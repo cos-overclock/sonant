@@ -11,12 +11,12 @@ use crate::domain::{
 };
 
 use super::LlmProvider;
+use super::response_parsing::{extract_json_payload, truncate_message};
 use super::schema_validator::{GENERATION_RESULT_JSON_SCHEMA, LlmResponseSchemaValidator};
 
 const DEFAULT_PROVIDER_ID: &str = "openai_compatible";
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(8);
-const MAX_ERROR_MESSAGE_LEN: usize = 256;
 
 const ENV_API_KEY: &str = "SONANT_OPENAI_COMPAT_API_KEY";
 const ENV_BASE_URL: &str = "SONANT_OPENAI_COMPAT_BASE_URL";
@@ -528,37 +528,6 @@ fn map_transport_error(error: reqwest::Error) -> LlmError {
     LlmError::Transport {
         message: format!("OpenAI-compatible transport error: {error}"),
     }
-}
-
-fn truncate_message(body: &str) -> String {
-    let compact = body.trim().replace('\n', " ");
-    compact.chars().take(MAX_ERROR_MESSAGE_LEN).collect()
-}
-
-fn extract_json_payload(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Some(fenced) = extract_markdown_fenced_block(trimmed) {
-        let fenced = fenced.trim();
-        if !fenced.is_empty() {
-            return Some(fenced);
-        }
-    }
-
-    let start = trimmed.find('{')?;
-    let end = trimmed.rfind('}')?;
-    (start <= end).then_some(&trimmed[start..=end])
-}
-
-fn extract_markdown_fenced_block(text: &str) -> Option<&str> {
-    let stripped = text.strip_prefix("```")?;
-    let first_newline = stripped.find('\n')?;
-    let (_, rest) = stripped.split_at(first_newline + 1);
-    let end = rest.rfind("```")?;
-    Some(&rest[..end])
 }
 
 fn non_empty_owned(value: &str) -> Option<String> {

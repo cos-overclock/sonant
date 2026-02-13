@@ -2,6 +2,7 @@ mod anthropic;
 mod openai_compatible;
 mod provider;
 mod provider_registry;
+mod response_parsing;
 pub mod schema_validator;
 
 pub use anthropic::AnthropicProvider;
