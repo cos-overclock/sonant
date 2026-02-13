@@ -139,14 +139,11 @@ impl OpenAiCompatibleProvider {
     }
 
     fn endpoint_url(&self) -> String {
-        format!(
-            "{}/v1/chat/completions",
-            self.api_base_url.trim_end_matches('/')
-        )
+        build_v1_url(&self.api_base_url, "chat/completions")
     }
 
     fn models_endpoint_url(&self) -> String {
-        format!("{}/v1/models", self.api_base_url.trim_end_matches('/'))
+        build_v1_url(&self.api_base_url, "models")
     }
 
     fn fetch_supported_models(&self) -> Result<BTreeSet<String>, LlmError> {
@@ -623,9 +620,20 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
+fn build_v1_url(api_base_url: &str, endpoint_path: &str) -> String {
+    let base = api_base_url.trim_end_matches('/');
+    let endpoint_path = endpoint_path.trim_start_matches('/');
+
+    if base.ends_with("/v1") {
+        format!("{base}/{endpoint_path}")
+    } else {
+        format!("{base}/v1/{endpoint_path}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{OpenAiCompatibleProvider, map_http_error, parse_bool};
+    use super::{OpenAiCompatibleProvider, build_v1_url, map_http_error, parse_bool};
     use crate::domain::{
         GenerationMode, GenerationParams, GenerationRequest, LlmError, MidiReferenceSummary,
         ModelRef, ReferenceSource,
@@ -861,5 +869,23 @@ mod tests {
         assert_eq!(parse_bool("off"), Some(false));
         assert_eq!(parse_bool("0"), Some(false));
         assert_eq!(parse_bool("maybe"), None);
+    }
+
+    #[test]
+    fn build_v1_url_appends_v1_when_base_has_no_version_segment() {
+        let url = build_v1_url("https://api.openai.com", "chat/completions");
+        assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+
+        let url = build_v1_url("https://api.openai.com/", "/models");
+        assert_eq!(url, "https://api.openai.com/v1/models");
+    }
+
+    #[test]
+    fn build_v1_url_avoids_duplicate_v1_when_base_already_has_v1() {
+        let url = build_v1_url("https://example.com/v1", "chat/completions");
+        assert_eq!(url, "https://example.com/v1/chat/completions");
+
+        let url = build_v1_url("https://example.com/v1/", "models");
+        assert_eq!(url, "https://example.com/v1/models");
     }
 }
