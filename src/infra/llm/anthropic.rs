@@ -17,6 +17,11 @@ const API_VERSION: &str = "2023-06-01";
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(8);
 const DEFAULT_MAX_TOKENS: u16 = 1024;
+const ENV_API_KEY: &str = "SONANT_ANTHROPIC_API_KEY";
+const ENV_API_KEY_FALLBACK: &str = "ANTHROPIC_API_KEY";
+const ENV_BASE_URL: &str = "SONANT_ANTHROPIC_BASE_URL";
+const ENV_TIMEOUT_SECS: &str = "SONANT_ANTHROPIC_TIMEOUT_SECS";
+const ENV_GLOBAL_TIMEOUT_SECS: &str = "SONANT_LLM_TIMEOUT_SECS";
 
 pub struct AnthropicProvider {
     api_key: String,
@@ -31,16 +36,18 @@ impl AnthropicProvider {
     }
 
     pub fn from_env() -> Result<Self, LlmError> {
-        let api_key = std::env::var("SONANT_ANTHROPIC_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .map_err(|_| {
+        let api_key = read_env_var(ENV_API_KEY)?
+            .or(read_env_var(ENV_API_KEY_FALLBACK)?)
+            .ok_or_else(|| {
                 LlmError::validation(
                     "Anthropic API key is missing (set SONANT_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY)",
                 )
             })?;
-        let api_base_url =
-            std::env::var("SONANT_ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.into());
-        Self::with_config(api_key, api_base_url, DEFAULT_TIMEOUT)
+        let api_base_url = read_env_var(ENV_BASE_URL)?.unwrap_or_else(|| DEFAULT_BASE_URL.into());
+        let timeout = read_timeout_from_env(ENV_TIMEOUT_SECS)?
+            .or(read_timeout_from_env(ENV_GLOBAL_TIMEOUT_SECS)?)
+            .unwrap_or(DEFAULT_TIMEOUT);
+        Self::with_config(api_key, api_base_url, timeout)
     }
 
     pub fn with_config(
@@ -361,9 +368,38 @@ struct AnthropicErrorDetail {
     message: String,
 }
 
+fn read_env_var(name: &str) -> Result<Option<String>, LlmError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(LlmError::validation(format!(
+            "{name} could not be read: {error}"
+        ))),
+    }
+}
+
+fn parse_timeout_seconds(name: &str, value: &str) -> Result<Duration, LlmError> {
+    let parsed = value.trim().parse::<u64>().map_err(|_| {
+        LlmError::validation(format!("{name} must be a positive integer in seconds"))
+    })?;
+    if parsed == 0 {
+        return Err(LlmError::validation(format!(
+            "{name} must be greater than 0 seconds"
+        )));
+    }
+    Ok(Duration::from_secs(parsed))
+}
+
+fn read_timeout_from_env(name: &str) -> Result<Option<Duration>, LlmError> {
+    let Some(value) = read_env_var(name)? else {
+        return Ok(None);
+    };
+    Ok(Some(parse_timeout_seconds(name, &value)?))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AnthropicProvider, map_http_error};
+    use super::{AnthropicProvider, map_http_error, parse_timeout_seconds};
     use crate::domain::{
         GenerationMode, GenerationParams, GenerationRequest, LlmError, MidiReferenceSummary,
         ModelRef, ReferenceSource,
@@ -547,5 +583,31 @@ mod tests {
         assert!(matches!(auth, LlmError::Auth));
         assert!(matches!(rate_limited, LlmError::RateLimited));
         assert!(matches!(timeout, LlmError::Timeout));
+    }
+
+    #[test]
+    fn parse_timeout_seconds_accepts_positive_integer_values() {
+        let timeout = parse_timeout_seconds("TEST_TIMEOUT", "8")
+            .expect("positive integer timeout should parse");
+        assert_eq!(timeout, Duration::from_secs(8));
+    }
+
+    #[test]
+    fn parse_timeout_seconds_rejects_invalid_values() {
+        let zero = parse_timeout_seconds("TEST_TIMEOUT", "0")
+            .expect_err("zero timeout should fail validation");
+        assert!(matches!(
+            zero,
+            LlmError::Validation { message }
+            if message == "TEST_TIMEOUT must be greater than 0 seconds"
+        ));
+
+        let invalid = parse_timeout_seconds("TEST_TIMEOUT", "abc")
+            .expect_err("non-integer timeout should fail validation");
+        assert!(matches!(
+            invalid,
+            LlmError::Validation { message }
+            if message == "TEST_TIMEOUT must be a positive integer in seconds"
+        ));
     }
 }
