@@ -80,6 +80,44 @@ mod tests {
         }
     }
 
+    struct RoutedCountingProvider {
+        provider_id: &'static str,
+        model_id: &'static str,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl LlmProvider for RoutedCountingProvider {
+        fn provider_id(&self) -> &str {
+            self.provider_id
+        }
+
+        fn supports_model(&self, model_id: &str) -> bool {
+            model_id == self.model_id
+        }
+
+        fn generate(&self, request: &GenerationRequest) -> Result<GenerationResult, LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+
+            Ok(GenerationResult {
+                request_id: request.request_id.clone(),
+                model: request.model.clone(),
+                candidates: vec![GenerationCandidate {
+                    id: "cand-1".to_string(),
+                    bars: 4,
+                    notes: vec![GeneratedNote {
+                        pitch: 60,
+                        start_tick: 0,
+                        duration_tick: 240,
+                        velocity: 100,
+                        channel: 1,
+                    }],
+                    score_hint: Some(0.9),
+                }],
+                metadata: GenerationMetadata::default(),
+            })
+        }
+    }
+
     fn valid_request() -> GenerationRequest {
         GenerationRequest {
             request_id: "req-1".to_string(),
@@ -161,6 +199,45 @@ mod tests {
             Some(("anthropic".to_string(), "claude-3-5-sonnet".to_string()))
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn generate_routes_to_provider_selected_by_request_model_ref() {
+        let anthropic_calls = Arc::new(AtomicUsize::new(0));
+        let openai_calls = Arc::new(AtomicUsize::new(0));
+
+        let anthropic_provider = Arc::new(RoutedCountingProvider {
+            provider_id: "anthropic",
+            model_id: "claude-3-5-sonnet",
+            calls: Arc::clone(&anthropic_calls),
+        });
+        let openai_provider = Arc::new(RoutedCountingProvider {
+            provider_id: "openai_compatible",
+            model_id: "gpt-4.1",
+            calls: Arc::clone(&openai_calls),
+        });
+
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register_shared(anthropic_provider)
+            .expect("anthropic provider registration should succeed");
+        registry
+            .register_shared(openai_provider)
+            .expect("openai-compatible provider registration should succeed");
+
+        let service = GenerationService::new(registry);
+        let mut request = valid_request();
+        request.model.provider = "openai_compatible".to_string();
+        request.model.model = "gpt-4.1".to_string();
+
+        let result = service
+            .generate(request)
+            .expect("generation should route to openai-compatible provider");
+
+        assert_eq!(result.model.provider, "openai_compatible");
+        assert_eq!(result.model.model, "gpt-4.1");
+        assert_eq!(anthropic_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(openai_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
