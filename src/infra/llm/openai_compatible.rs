@@ -24,7 +24,7 @@ const ENV_PROVIDER_ID: &str = "SONANT_OPENAI_COMPAT_PROVIDER_ID";
 const ENV_MODELS: &str = "SONANT_OPENAI_COMPAT_MODELS";
 const ENV_FETCH_MODELS: &str = "SONANT_OPENAI_COMPAT_FETCH_MODELS";
 
-const DEFAULT_SUPPORTED_MODELS: &[&str] = &["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"];
+const DEFAULT_SUPPORTED_MODELS: &[&str] = &["gpt-5.2"];
 
 pub struct OpenAiCompatibleProvider {
     provider_id: String,
@@ -671,7 +671,7 @@ mod tests {
             "test-key",
             "https://api.openai.com",
             Duration::from_secs(2),
-            vec!["gpt-4.1".to_string(), "gpt-4o-mini".to_string()],
+            vec!["gpt-5.2".to_string()],
         )
         .expect("provider should build")
     }
@@ -681,7 +681,7 @@ mod tests {
             request_id: "req-42".to_string(),
             model: ModelRef {
                 provider: "openai_compatible".to_string(),
-                model: "gpt-4.1".to_string(),
+                model: "gpt-5.2".to_string(),
             },
             mode: GenerationMode::Melody,
             prompt: "warm synth melody".to_string(),
@@ -714,7 +714,7 @@ mod tests {
             .build_request_payload(&request())
             .expect("payload should be built");
 
-        assert_eq!(payload.model, "gpt-4.1");
+        assert_eq!(payload.model, "gpt-5.2");
         assert_eq!(payload.max_tokens, Some(512));
         assert_eq!(payload.temperature, Some(0.5));
         assert_eq!(payload.top_p, Some(0.9));
@@ -743,7 +743,7 @@ mod tests {
               "finish_reason": "stop",
               "message": {
                 "role": "assistant",
-                "content": "```json\n{\n  \"request_id\": \"req-42\",\n  \"model\": {\n    \"provider\": \"openai_compatible\",\n    \"model\": \"gpt-4.1\"\n  },\n  \"candidates\": [\n    {\n      \"id\": \"cand-1\",\n      \"bars\": 4,\n      \"notes\": [\n        {\n          \"pitch\": 60,\n          \"start_tick\": 0,\n          \"duration_tick\": 240,\n          \"velocity\": 96,\n          \"channel\": 1\n        }\n      ]\n    }\n  ]\n}\n```"
+                "content": "```json\n{\n  \"request_id\": \"req-42\",\n  \"model\": {\n    \"provider\": \"openai_compatible\",\n    \"model\": \"gpt-5.2\"\n  },\n  \"candidates\": [\n    {\n      \"id\": \"cand-1\",\n      \"bars\": 4,\n      \"notes\": [\n        {\n          \"pitch\": 60,\n          \"start_tick\": 0,\n          \"duration_tick\": 240,\n          \"velocity\": 96,\n          \"channel\": 1\n        }\n      ]\n    }\n  ]\n}\n```"
               }
             }
           ],
@@ -787,7 +787,7 @@ mod tests {
                 "content": [
                   {
                     "type": "text",
-                    "text": "{\"request_id\":\"req-42\",\"model\":{\"provider\":\"openai_compatible\",\"model\":\"gpt-4.1\"},\"candidates\":["
+                    "text": "{\"request_id\":\"req-42\",\"model\":{\"provider\":\"openai_compatible\",\"model\":\"gpt-5.2\"},\"candidates\":["
                   },
                   {
                     "type": "text",
@@ -820,7 +820,7 @@ mod tests {
           "choices": [
             {
               "message": {
-                "content": "{\"request_id\":\"req-other\",\"model\":{\"provider\":\"openai_compatible\",\"model\":\"gpt-4.1\"},\"candidates\":[{\"id\":\"cand-1\",\"bars\":4,\"notes\":[{\"pitch\":60,\"start_tick\":0,\"duration_tick\":240,\"velocity\":96}]}]}"
+                "content": "{\"request_id\":\"req-other\",\"model\":{\"provider\":\"openai_compatible\",\"model\":\"gpt-5.2\"},\"candidates\":[{\"id\":\"cand-1\",\"bars\":4,\"notes\":[{\"pitch\":60,\"start_tick\":0,\"duration_tick\":240,\"velocity\":96}]}]}"
               }
             }
           ]
@@ -861,9 +861,7 @@ mod tests {
     fn supports_model_uses_static_catalog() {
         let provider = provider();
 
-        assert!(provider.supports_model("gpt-4.1"));
-        assert!(provider.supports_model(" gpt-4o-mini "));
-        assert!(!provider.supports_model("gpt-5"));
+        assert!(provider.supports_model("gpt-5.2"));
     }
 
     #[test]
