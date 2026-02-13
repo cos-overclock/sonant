@@ -5624,6 +5624,7 @@ dependencies = [
  "clack-extensions",
  "clack-plugin",
  "cocoa 0.25.0",
+ "crossbeam-queue",
  "gpui",
  "gpui-component",
  "jsonschema",

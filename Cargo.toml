@@ -9,7 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 clack-plugin = { git = "https://github.com/prokopyl/clack.git", package = "clack-plugin" }
-clack-extensions = { git = "https://github.com/prokopyl/clack.git", package = "clack-extensions", features = ["clack-plugin", "gui", "audio-ports", "state"] }
+clack-extensions = { git = "https://github.com/prokopyl/clack.git", package = "clack-extensions", features = ["clack-plugin", "gui", "audio-ports", "note-ports", "state"] }
+crossbeam-queue = "0.3"
 gpui = "0.2.2"
 gpui-component = "0.5.1"
 libc = "0.2"

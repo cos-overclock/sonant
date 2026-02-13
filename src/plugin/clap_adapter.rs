@@ -1,17 +1,30 @@
-use clack_extensions::audio_ports::{
-    AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
-    PluginAudioPortsImpl,
-};
+use clack_extensions::audio_ports::{AudioPortInfoWriter, PluginAudioPorts, PluginAudioPortsImpl};
 use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, PluginGui, PluginGuiImpl};
+use clack_extensions::note_ports::{
+    NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
+    PluginNotePortsImpl,
+};
 use clack_extensions::state::{PluginState, PluginStateImpl};
+use clack_plugin::events::Match;
+use clack_plugin::events::event_types::MidiEvent;
+use clack_plugin::events::spaces::CoreEventSpace;
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
+use crossbeam_queue::ArrayQueue;
 use std::ffi::CStr;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+const MIDI_EVENT_QUEUE_CAPACITY: usize = 2048;
+const NOTE_PORT_INDEX_MAIN: u32 = 0;
+const NOTE_PORT_ID_IN: u32 = 0;
+const NOTE_PORT_ID_OUT: u32 = 1;
+const NOTE_PORT_NAME_IN: &[u8] = b"midi_in";
+const NOTE_PORT_NAME_OUT: &[u8] = b"midi_out";
 
 pub struct SonantPlugin;
 
@@ -24,6 +37,7 @@ impl Plugin for SonantPlugin {
         builder
             .register::<PluginGui>()
             .register::<PluginAudioPorts>()
+            .register::<PluginNotePorts>()
             .register::<PluginState>();
     }
 }
@@ -37,11 +51,11 @@ impl DefaultPluginFactory for SonantPlugin {
             .with_url("https://example.com/sonant")
             .with_version("0.1.0")
             .with_description("Sonant GPUI CLAP PoC")
-            .with_features([AUDIO_EFFECT, STEREO, UTILITY])
+            .with_features([NOTE_EFFECT, UTILITY])
     }
 
     fn new_shared(_host: HostSharedHandle<'_>) -> Result<Self::Shared<'_>, PluginError> {
-        Ok(SonantShared)
+        Ok(SonantShared::new())
     }
 
     fn new_main_thread<'a>(
@@ -55,7 +69,147 @@ impl DefaultPluginFactory for SonantPlugin {
     }
 }
 
-pub struct SonantShared;
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct RtMidiEvent {
+    time: u32,
+    port_index: u16,
+    data: [u8; 3],
+}
+
+impl RtMidiEvent {
+    fn from_midi(event: &MidiEvent) -> Self {
+        Self {
+            time: event.time(),
+            port_index: event.port_index(),
+            data: event.data(),
+        }
+    }
+
+    fn to_clap(self) -> MidiEvent {
+        MidiEvent::new(self.time, self.port_index, self.data)
+    }
+}
+
+fn map_input_event(event: &UnknownEvent) -> Option<RtMidiEvent> {
+    match event.as_core_event() {
+        Some(CoreEventSpace::Midi(event)) => Some(RtMidiEvent::from_midi(event)),
+        Some(CoreEventSpace::NoteOn(event)) => note_event_to_midi(
+            event.time(),
+            event.port_index(),
+            event.channel(),
+            event.key(),
+            event.velocity(),
+            true,
+        ),
+        Some(CoreEventSpace::NoteOff(event)) => note_event_to_midi(
+            event.time(),
+            event.port_index(),
+            event.channel(),
+            event.key(),
+            event.velocity(),
+            false,
+        ),
+        Some(CoreEventSpace::NoteChoke(event)) => note_event_to_midi(
+            event.time(),
+            event.port_index(),
+            event.channel(),
+            event.key(),
+            0.0,
+            false,
+        ),
+        _ => None,
+    }
+}
+
+fn note_event_to_midi(
+    time: u32,
+    port_index: Match<u16>,
+    channel: Match<u16>,
+    key: Match<u16>,
+    velocity: f64,
+    is_note_on: bool,
+) -> Option<RtMidiEvent> {
+    let port_index = port_index.into_specific()?;
+    let channel = channel.into_specific()?;
+    let key = key.into_specific()?;
+
+    if channel > 0x0F || key > 0x7F {
+        return None;
+    }
+
+    let status = if is_note_on { 0x90 } else { 0x80 } | ((channel as u8) & 0x0F);
+
+    Some(RtMidiEvent {
+        time,
+        port_index,
+        data: [status, key as u8, velocity_to_midi_byte(velocity)],
+    })
+}
+
+fn velocity_to_midi_byte(velocity: f64) -> u8 {
+    (velocity.clamp(0.0, 1.0) * 127.0).round() as u8
+}
+
+struct MidiBridge {
+    live_input_queue: ArrayQueue<RtMidiEvent>,
+    generated_output_queue: ArrayQueue<RtMidiEvent>,
+}
+
+impl MidiBridge {
+    fn new(capacity: usize) -> Self {
+        Self {
+            live_input_queue: ArrayQueue::new(capacity),
+            generated_output_queue: ArrayQueue::new(capacity),
+        }
+    }
+
+    fn push_live_input(&self, event: RtMidiEvent) {
+        let _ = self.live_input_queue.force_push(event);
+    }
+
+    #[allow(dead_code)]
+    fn pop_live_input(&self) -> Option<RtMidiEvent> {
+        self.live_input_queue.pop()
+    }
+
+    fn push_generated_output(&self, event: RtMidiEvent) {
+        let _ = self.generated_output_queue.force_push(event);
+    }
+
+    fn pop_generated_output(&self) -> Option<RtMidiEvent> {
+        self.generated_output_queue.pop()
+    }
+
+    fn reset(&self) {
+        while self.live_input_queue.pop().is_some() {}
+        while self.generated_output_queue.pop().is_some() {}
+    }
+}
+
+pub struct SonantShared {
+    midi_bridge: Arc<MidiBridge>,
+}
+
+impl SonantShared {
+    fn new() -> Self {
+        Self {
+            midi_bridge: Arc::new(MidiBridge::new(MIDI_EVENT_QUEUE_CAPACITY)),
+        }
+    }
+
+    fn reset_queues(&self) {
+        self.midi_bridge.reset();
+    }
+
+    #[allow(dead_code)]
+    pub fn enqueue_generated_raw_midi(&self, time: u32, port_index: u16, data: [u8; 3]) {
+        self.midi_bridge.push_generated_output(RtMidiEvent {
+            time,
+            port_index,
+            data,
+        });
+    }
+}
 
 impl PluginShared<'_> for SonantShared {}
 
@@ -108,7 +262,10 @@ impl PluginStateImpl for SonantPluginMainThread<'_> {
     }
 }
 
-pub struct SonantAudioProcessor;
+pub struct SonantAudioProcessor {
+    midi_bridge: Arc<MidiBridge>,
+    pending_output_event: Option<RtMidiEvent>,
+}
 
 impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
     for SonantAudioProcessor
@@ -116,19 +273,57 @@ impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
         _main_thread: &mut SonantPluginMainThread<'a>,
-        _shared: &'a SonantShared,
+        shared: &'a SonantShared,
         _audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
-        Ok(Self)
+        shared.reset_queues();
+        Ok(Self {
+            midi_bridge: Arc::clone(&shared.midi_bridge),
+            pending_output_event: None,
+        })
     }
 
     fn process(
         &mut self,
         _process: Process,
         _audio: Audio,
-        _events: Events,
+        events: Events,
     ) -> Result<ProcessStatus, PluginError> {
+        for event in events.input.iter() {
+            if let Some(midi_event) = map_input_event(event) {
+                self.midi_bridge.push_live_input(midi_event);
+            }
+        }
+
+        if let Some(event) = self.pending_output_event.take()
+            && events.output.try_push(event.to_clap()).is_err()
+        {
+            self.pending_output_event = Some(event);
+            return Ok(ProcessStatus::Continue);
+        }
+
+        while let Some(event) = self.midi_bridge.pop_generated_output() {
+            if events.output.try_push(event.to_clap()).is_err() {
+                self.pending_output_event = Some(event);
+
+                // Host output buffer is saturated. Keep the newest event and drop stale ones.
+                while let Some(latest_event) = self.midi_bridge.pop_generated_output() {
+                    self.pending_output_event = Some(latest_event);
+                }
+                break;
+            }
+        }
+
         Ok(ProcessStatus::Continue)
+    }
+
+    fn deactivate(self, _main_thread: &mut SonantPluginMainThread<'a>) {
+        self.midi_bridge.reset();
+    }
+
+    fn reset(&mut self) {
+        self.pending_output_event = None;
+        self.midi_bridge.reset();
     }
 }
 
@@ -195,22 +390,50 @@ impl PluginGuiImpl for SonantPluginMainThread<'_> {
 }
 
 impl PluginAudioPortsImpl for SonantPluginMainThread<'_> {
-    fn count(&mut self, _is_input: bool) -> u32 {
-        1
+    fn count(&mut self, is_input: bool) -> u32 {
+        audio_port_count(is_input)
     }
 
-    fn get(&mut self, index: u32, _is_input: bool, writer: &mut AudioPortInfoWriter) {
-        if index == 0 {
-            writer.set(&AudioPortInfo {
-                id: ClapId::new(0),
-                name: b"main",
-                channel_count: 2,
-                flags: AudioPortFlags::IS_MAIN,
-                port_type: Some(AudioPortType::STEREO),
-                in_place_pair: None,
-            });
+    fn get(&mut self, _index: u32, _is_input: bool, _writer: &mut AudioPortInfoWriter) {}
+}
+
+impl PluginNotePortsImpl for SonantPluginMainThread<'_> {
+    fn count(&mut self, is_input: bool) -> u32 {
+        note_port_count(is_input)
+    }
+
+    fn get(&mut self, index: u32, is_input: bool, writer: &mut NotePortInfoWriter) {
+        if let Some(note_port) = note_port_definition(index, is_input) {
+            writer.set(&note_port);
         }
     }
+}
+
+const fn audio_port_count(_is_input: bool) -> u32 {
+    0
+}
+
+const fn note_port_count(_is_input: bool) -> u32 {
+    1
+}
+
+fn note_port_definition(index: u32, is_input: bool) -> Option<NotePortInfo<'static>> {
+    if index != NOTE_PORT_INDEX_MAIN {
+        return None;
+    }
+
+    let (id, name) = if is_input {
+        (NOTE_PORT_ID_IN, NOTE_PORT_NAME_IN)
+    } else {
+        (NOTE_PORT_ID_OUT, NOTE_PORT_NAME_OUT)
+    };
+
+    Some(NotePortInfo {
+        id: ClapId::new(id),
+        name,
+        supported_dialects: NoteDialects::MIDI,
+        preferred_dialect: Some(NoteDialect::Midi),
+    })
 }
 
 #[derive(Default)]
@@ -346,6 +569,130 @@ fn current_library_path() -> Option<PathBuf> {
 #[cfg(not(target_family = "unix"))]
 fn current_library_path() -> Option<PathBuf> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clack_plugin::events::event_types::{NoteOffEvent, NoteOnEvent};
+
+    #[test]
+    fn note_port_definition_exposes_midi_in_and_out() {
+        assert_eq!(audio_port_count(true), 0);
+        assert_eq!(audio_port_count(false), 0);
+        assert_eq!(note_port_count(true), 1);
+        assert_eq!(note_port_count(false), 1);
+
+        let input = note_port_definition(NOTE_PORT_INDEX_MAIN, true)
+            .expect("input note port must be defined");
+        assert_eq!(input.id, ClapId::new(NOTE_PORT_ID_IN));
+        assert_eq!(input.name, NOTE_PORT_NAME_IN);
+        assert_eq!(input.preferred_dialect, Some(NoteDialect::Midi));
+        assert!(input.supported_dialects.supports(NoteDialect::Midi));
+
+        let output = note_port_definition(NOTE_PORT_INDEX_MAIN, false)
+            .expect("output note port must be defined");
+        assert_eq!(output.id, ClapId::new(NOTE_PORT_ID_OUT));
+        assert_eq!(output.name, NOTE_PORT_NAME_OUT);
+        assert_eq!(output.preferred_dialect, Some(NoteDialect::Midi));
+        assert!(output.supported_dialects.supports(NoteDialect::Midi));
+    }
+
+    #[test]
+    fn map_input_event_converts_note_events_to_midi() {
+        let note_on = NoteOnEvent::new(12, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.5);
+        let mapped_on = map_input_event(note_on.as_ref()).expect("note on should convert");
+        assert_eq!(
+            mapped_on,
+            RtMidiEvent {
+                time: 12,
+                port_index: 0,
+                data: [0x92, 64, 64],
+            }
+        );
+
+        let note_off = NoteOffEvent::new(15, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.25);
+        let mapped_off = map_input_event(note_off.as_ref()).expect("note off should convert");
+        assert_eq!(
+            mapped_off,
+            RtMidiEvent {
+                time: 15,
+                port_index: 0,
+                data: [0x82, 64, 32],
+            }
+        );
+    }
+
+    #[test]
+    fn map_input_event_ignores_non_specific_note_targets() {
+        let wildcard_note =
+            NoteOnEvent::new(0, Pckn::new(Match::<u16>::All, 1u16, 64u16, 0u32), 1.0);
+
+        assert!(map_input_event(wildcard_note.as_ref()).is_none());
+    }
+
+    #[test]
+    fn map_input_event_passes_through_midi_events() {
+        let midi_event = MidiEvent::new(8, 1, [0x90, 60, 100]);
+        let mapped = map_input_event(midi_event.as_ref()).expect("midi events should pass through");
+
+        assert_eq!(
+            mapped,
+            RtMidiEvent {
+                time: 8,
+                port_index: 1,
+                data: [0x90, 60, 100],
+            }
+        );
+    }
+
+    #[test]
+    fn midi_bridge_drops_oldest_when_queue_is_full() {
+        let bridge = MidiBridge::new(2);
+        let event_1 = RtMidiEvent {
+            time: 1,
+            port_index: 0,
+            data: [0x90, 60, 100],
+        };
+        let event_2 = RtMidiEvent {
+            time: 2,
+            port_index: 0,
+            data: [0x90, 61, 100],
+        };
+        let event_3 = RtMidiEvent {
+            time: 3,
+            port_index: 0,
+            data: [0x90, 62, 100],
+        };
+
+        bridge.push_generated_output(event_1);
+        bridge.push_generated_output(event_2);
+        bridge.push_generated_output(event_3);
+
+        assert_eq!(bridge.pop_generated_output(), Some(event_2));
+        assert_eq!(bridge.pop_generated_output(), Some(event_3));
+        assert_eq!(bridge.pop_generated_output(), None);
+    }
+
+    #[test]
+    fn midi_bridge_reset_clears_both_queues() {
+        let bridge = MidiBridge::new(2);
+        bridge.push_live_input(RtMidiEvent {
+            time: 1,
+            port_index: 0,
+            data: [0x90, 60, 1],
+        });
+        bridge.push_generated_output(RtMidiEvent {
+            time: 2,
+            port_index: 0,
+            data: [0x80, 60, 0],
+        });
+
+        bridge.reset();
+
+        assert_eq!(bridge.pop_live_input(), None);
+        assert_eq!(bridge.pop_generated_output(), None);
+    }
 }
 
 clack_export_entry!(SinglePluginEntry<SonantPlugin>);
