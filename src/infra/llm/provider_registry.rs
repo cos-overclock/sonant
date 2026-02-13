@@ -222,4 +222,79 @@ mod tests {
             if message == "provider 'anthropic' is already registered"
         ));
     }
+
+    #[test]
+    fn register_rejects_empty_provider_id() {
+        let mut registry = ProviderRegistry::new();
+
+        let error = registry
+            .register(FakeProvider {
+                provider_id: "",
+                supported_models: &["some-model"],
+            })
+            .expect_err("empty provider_id should fail registration");
+
+        assert!(matches!(error, LlmError::Validation { .. }));
+    }
+
+    #[test]
+    fn resolve_rejects_empty_provider_id() {
+        let registry = ProviderRegistry::new();
+
+        let error = registry
+            .resolve("", "gpt-4.1")
+            .expect_err("empty provider_id should fail resolution");
+
+        assert!(matches!(error, LlmError::Validation { .. }));
+    }
+
+    #[test]
+    fn resolve_rejects_empty_model_id() {
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register(FakeProvider {
+                provider_id: "openai",
+                supported_models: &["gpt-4.1"],
+            })
+            .expect("provider registration should succeed");
+
+        let error = registry
+            .resolve("openai", "")
+            .expect_err("empty model_id should fail resolution");
+
+        assert!(matches!(error, LlmError::Validation { .. }));
+    }
+
+    #[test]
+    fn resolve_rejects_whitespace_only_ids() {
+        let mut registry = ProviderRegistry::new();
+
+        // Whitespace-only provider_id should be rejected at registration time.
+        let error = registry
+            .register(FakeProvider {
+                provider_id: "   ",
+                supported_models: &["some-model"],
+            })
+            .expect_err("whitespace-only provider_id should fail registration");
+
+        assert!(matches!(error, LlmError::Validation { .. }));
+
+        // Register a valid provider to test resolution-time validation for both IDs.
+        registry
+            .register(FakeProvider {
+                provider_id: "openai",
+                supported_models: &["gpt-4.1"],
+            })
+            .expect("provider registration should succeed");
+
+        let error = registry
+            .resolve("   ", "gpt-4.1")
+            .expect_err("whitespace-only provider_id should fail resolution");
+        assert!(matches!(error, LlmError::Validation { .. }));
+
+        let error = registry
+            .resolve("openai", "   ")
+            .expect_err("whitespace-only model_id should fail resolution");
+        assert!(matches!(error, LlmError::Validation { .. }));
+    }
 }
