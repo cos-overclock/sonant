@@ -29,7 +29,7 @@ const NOTE_PORT_NAME_OUT: &[u8] = b"midi_out";
 pub struct SonantPlugin;
 
 impl Plugin for SonantPlugin {
-    type AudioProcessor<'a> = SonantAudioProcessor;
+    type AudioProcessor<'a> = SonantAudioProcessor<'a>;
     type Shared<'a> = SonantShared;
     type MainThread<'a> = SonantPluginMainThread<'a>;
 
@@ -74,6 +74,13 @@ struct RtMidiEvent {
     time: u32,
     port_index: u16,
     data: [u8; 3],
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct LiveInputEvent {
+    pub time: u32,
+    pub port_index: u16,
+    pub data: [u8; 3],
 }
 
 impl RtMidiEvent {
@@ -152,6 +159,7 @@ fn velocity_to_midi_byte(velocity: f64) -> u8 {
 
 struct MidiBridge {
     live_input_queue: ArrayQueue<RtMidiEvent>,
+    app_input_queue: ArrayQueue<RtMidiEvent>,
     generated_output_queue: ArrayQueue<RtMidiEvent>,
 }
 
@@ -159,6 +167,7 @@ impl MidiBridge {
     fn new(capacity: usize) -> Self {
         Self {
             live_input_queue: ArrayQueue::new(capacity),
+            app_input_queue: ArrayQueue::new(capacity),
             generated_output_queue: ArrayQueue::new(capacity),
         }
     }
@@ -167,9 +176,16 @@ impl MidiBridge {
         let _ = self.live_input_queue.force_push(event);
     }
 
-    #[allow(dead_code)]
     fn pop_live_input(&self) -> Option<RtMidiEvent> {
         self.live_input_queue.pop()
+    }
+
+    fn push_app_input(&self, event: RtMidiEvent) {
+        let _ = self.app_input_queue.force_push(event);
+    }
+
+    fn pop_app_input(&self) -> Option<RtMidiEvent> {
+        self.app_input_queue.pop()
     }
 
     fn push_generated_output(&self, event: RtMidiEvent) {
@@ -180,8 +196,16 @@ impl MidiBridge {
         self.generated_output_queue.pop()
     }
 
+    fn pop_latest_generated_or(&self, mut fallback: Option<RtMidiEvent>) -> Option<RtMidiEvent> {
+        while let Some(latest_event) = self.generated_output_queue.pop() {
+            fallback = Some(latest_event);
+        }
+        fallback
+    }
+
     fn reset(&self) {
         while self.live_input_queue.pop().is_some() {}
+        while self.app_input_queue.pop().is_some() {}
         while self.generated_output_queue.pop().is_some() {}
     }
 }
@@ -201,6 +225,22 @@ impl SonantShared {
         self.midi_bridge.reset();
     }
 
+    fn flush_live_input_to_app(&self) {
+        while let Some(event) = self.midi_bridge.pop_live_input() {
+            self.midi_bridge.push_app_input(event);
+        }
+    }
+
+    pub fn pop_live_input_event(&self) -> Option<LiveInputEvent> {
+        self.midi_bridge
+            .pop_app_input()
+            .map(|event| LiveInputEvent {
+                time: event.time,
+                port_index: event.port_index,
+                data: event.data,
+            })
+    }
+
     #[allow(dead_code)]
     pub fn enqueue_generated_raw_midi(&self, time: u32, port_index: u16, data: [u8; 3]) {
         self.midi_bridge.push_generated_output(RtMidiEvent {
@@ -214,12 +254,15 @@ impl SonantShared {
 impl PluginShared<'_> for SonantShared {}
 
 pub struct SonantPluginMainThread<'a> {
-    #[allow(dead_code)]
     shared: &'a SonantShared,
     gui: SonantGuiController,
 }
 
-impl<'a> PluginMainThread<'a, SonantShared> for SonantPluginMainThread<'a> {}
+impl<'a> PluginMainThread<'a, SonantShared> for SonantPluginMainThread<'a> {
+    fn on_main_thread(&mut self) {
+        self.shared.flush_live_input_to_app();
+    }
+}
 
 const STATE_MAGIC: &[u8; 8] = b"SONANT01";
 const STATE_VERSION: u32 = 1;
@@ -262,22 +305,24 @@ impl PluginStateImpl for SonantPluginMainThread<'_> {
     }
 }
 
-pub struct SonantAudioProcessor {
+pub struct SonantAudioProcessor<'a> {
+    host: HostAudioProcessorHandle<'a>,
     midi_bridge: Arc<MidiBridge>,
     pending_output_event: Option<RtMidiEvent>,
 }
 
 impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
-    for SonantAudioProcessor
+    for SonantAudioProcessor<'a>
 {
     fn activate(
-        _host: HostAudioProcessorHandle<'a>,
+        host: HostAudioProcessorHandle<'a>,
         _main_thread: &mut SonantPluginMainThread<'a>,
         shared: &'a SonantShared,
         _audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
         shared.reset_queues();
         Ok(Self {
+            host,
             midi_bridge: Arc::clone(&shared.midi_bridge),
             pending_output_event: None,
         })
@@ -289,27 +334,30 @@ impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
         _audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
+        let mut received_live_input = false;
         for event in events.input.iter() {
             if let Some(midi_event) = map_input_event(event) {
                 self.midi_bridge.push_live_input(midi_event);
+                received_live_input = true;
             }
+        }
+
+        if received_live_input {
+            self.host.request_callback();
         }
 
         if let Some(event) = self.pending_output_event.take()
             && events.output.try_push(event.to_clap()).is_err()
         {
-            self.pending_output_event = Some(event);
+            // Host output is still saturated. Keep only the latest generated event.
+            self.pending_output_event = self.midi_bridge.pop_latest_generated_or(Some(event));
             return Ok(ProcessStatus::Continue);
         }
 
         while let Some(event) = self.midi_bridge.pop_generated_output() {
             if events.output.try_push(event.to_clap()).is_err() {
-                self.pending_output_event = Some(event);
-
                 // Host output buffer is saturated. Keep the newest event and drop stale ones.
-                while let Some(latest_event) = self.midi_bridge.pop_generated_output() {
-                    self.pending_output_event = Some(latest_event);
-                }
+                self.pending_output_event = self.midi_bridge.pop_latest_generated_or(Some(event));
                 break;
             }
         }
@@ -691,7 +739,70 @@ mod tests {
         bridge.reset();
 
         assert_eq!(bridge.pop_live_input(), None);
+        assert_eq!(bridge.pop_app_input(), None);
         assert_eq!(bridge.pop_generated_output(), None);
+    }
+
+    #[test]
+    fn midi_bridge_flushes_live_input_into_app_queue() {
+        let shared = SonantShared::new();
+
+        shared.midi_bridge.push_live_input(RtMidiEvent {
+            time: 10,
+            port_index: 2,
+            data: [0x90, 60, 100],
+        });
+        shared.flush_live_input_to_app();
+
+        assert_eq!(
+            shared.pop_live_input_event(),
+            Some(LiveInputEvent {
+                time: 10,
+                port_index: 2,
+                data: [0x90, 60, 100],
+            })
+        );
+        assert_eq!(shared.pop_live_input_event(), None);
+    }
+
+    #[test]
+    fn pop_latest_generated_or_returns_newest_queued_event() {
+        let bridge = MidiBridge::new(4);
+        let fallback = RtMidiEvent {
+            time: 1,
+            port_index: 0,
+            data: [0x90, 60, 1],
+        };
+        let newest = RtMidiEvent {
+            time: 3,
+            port_index: 0,
+            data: [0x90, 62, 3],
+        };
+
+        bridge.push_generated_output(RtMidiEvent {
+            time: 2,
+            port_index: 0,
+            data: [0x90, 61, 2],
+        });
+        bridge.push_generated_output(newest);
+
+        assert_eq!(bridge.pop_latest_generated_or(Some(fallback)), Some(newest));
+        assert_eq!(bridge.pop_generated_output(), None);
+    }
+
+    #[test]
+    fn pop_latest_generated_or_keeps_fallback_when_queue_is_empty() {
+        let bridge = MidiBridge::new(2);
+        let fallback = RtMidiEvent {
+            time: 7,
+            port_index: 1,
+            data: [0x80, 64, 0],
+        };
+
+        assert_eq!(
+            bridge.pop_latest_generated_or(Some(fallback)),
+            Some(fallback)
+        );
     }
 }
 
