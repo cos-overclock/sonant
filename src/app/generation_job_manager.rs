@@ -392,7 +392,8 @@ fn spawn_generation_job(
             return;
         }
 
-        let result = service_for_thread.generate(request);
+        let result = service_for_thread
+            .generate_with_cancel(request, || cancel_for_thread.load(Ordering::SeqCst));
         let cancelled = cancel_for_thread.load(Ordering::SeqCst);
 
         let _ = tx_for_thread.send(WorkerMessage::Completion {

@@ -1,5 +1,5 @@
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::domain::{GenerationRequest, GenerationResult, LlmError};
 use crate::infra::llm::ProviderRegistry;
@@ -7,6 +7,8 @@ use crate::infra::llm::ProviderRegistry;
 const DEFAULT_RETRY_MAX_ATTEMPTS: u8 = 3;
 const DEFAULT_RETRY_INITIAL_BACKOFF_MS: u64 = 200;
 const DEFAULT_RETRY_MAX_BACKOFF_MS: u64 = 2_000;
+const BACKOFF_CANCEL_POLL_INTERVAL_MS: u64 = 10;
+const CANCELLATION_ERROR_MESSAGE: &str = "generation cancelled";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GenerationRetryConfig {
@@ -73,7 +75,18 @@ impl GenerationService {
         })
     }
 
-    pub fn generate(&self, mut request: GenerationRequest) -> Result<GenerationResult, LlmError> {
+    pub fn generate(&self, request: GenerationRequest) -> Result<GenerationResult, LlmError> {
+        self.generate_with_cancel(request, || false)
+    }
+
+    pub fn generate_with_cancel<F>(
+        &self,
+        mut request: GenerationRequest,
+        is_cancelled: F,
+    ) -> Result<GenerationResult, LlmError>
+    where
+        F: Fn() -> bool,
+    {
         // Canonicalize provider/model IDs so resolution and provider execution use the same values.
         request.model.provider = request.model.provider.trim().to_string();
         request.model.model = request.model.model.trim().to_string();
@@ -86,6 +99,10 @@ impl GenerationService {
         let mut attempt = 1_u8;
 
         loop {
+            if is_cancelled() {
+                return Err(LlmError::internal(CANCELLATION_ERROR_MESSAGE));
+            }
+
             match provider.generate(&request) {
                 Ok(result) => {
                     result.validate()?;
@@ -96,12 +113,44 @@ impl GenerationService {
                         return Err(error);
                     }
 
+                    if is_cancelled() {
+                        return Err(LlmError::internal(CANCELLATION_ERROR_MESSAGE));
+                    }
+
                     let backoff = self.retry_config.backoff_for_retry(attempt);
-                    thread::sleep(backoff);
+                    if sleep_with_cancellation(backoff, &is_cancelled) {
+                        return Err(LlmError::internal(CANCELLATION_ERROR_MESSAGE));
+                    }
                     attempt = attempt.saturating_add(1);
                 }
             }
         }
+    }
+}
+
+fn sleep_with_cancellation<F>(duration: Duration, is_cancelled: &F) -> bool
+where
+    F: Fn() -> bool,
+{
+    if duration.is_zero() {
+        return is_cancelled();
+    }
+
+    let deadline = Instant::now() + duration;
+    let poll_interval = Duration::from_millis(BACKOFF_CANCEL_POLL_INTERVAL_MS);
+
+    loop {
+        if is_cancelled() {
+            return true;
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+
+        let remaining = deadline.saturating_duration_since(now);
+        thread::sleep(remaining.min(poll_interval));
     }
 }
 
@@ -111,7 +160,8 @@ mod tests {
 
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::thread;
 
     use super::{GenerationRetryConfig, GenerationService};
     use crate::domain::{
@@ -541,5 +591,80 @@ mod tests {
 
         assert!(matches!(error, LlmError::RateLimited));
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn generate_with_cancel_aborts_before_first_attempt() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(RetryControlledProvider {
+            calls: Arc::clone(&calls),
+            failures_before_success: usize::MAX,
+            failure_error: LlmError::Timeout,
+        });
+
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register_shared(provider)
+            .expect("provider registration should succeed");
+
+        let service = GenerationService::new(registry);
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let error = service
+            .generate_with_cancel(valid_request(), || cancelled.load(Ordering::SeqCst))
+            .expect_err("cancelled request should fail before calling provider");
+
+        assert!(matches!(
+            error,
+            LlmError::Internal { message } if message == "generation cancelled"
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn generate_with_cancel_interrupts_retry_backoff_sleep() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(RetryControlledProvider {
+            calls: Arc::clone(&calls),
+            failures_before_success: usize::MAX,
+            failure_error: LlmError::Timeout,
+        });
+
+        let mut registry = ProviderRegistry::new();
+        registry
+            .register_shared(provider)
+            .expect("provider registration should succeed");
+
+        let retry_config = GenerationRetryConfig {
+            max_attempts: 5,
+            initial_backoff: Duration::from_millis(400),
+            max_backoff: Duration::from_millis(400),
+        };
+        let service = GenerationService::with_retry_config(registry, retry_config)
+            .expect("retry config should be valid");
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_for_thread = Arc::clone(&cancelled);
+        let cancellation_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            cancelled_for_thread.store(true, Ordering::SeqCst);
+        });
+
+        let started = Instant::now();
+        let error = service
+            .generate_with_cancel(valid_request(), || cancelled.load(Ordering::SeqCst))
+            .expect_err("cancellation should interrupt retry backoff");
+        cancellation_thread
+            .join()
+            .expect("cancellation control thread should join");
+
+        assert!(matches!(
+            error,
+            LlmError::Internal { message } if message == "generation cancelled"
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "cancellable sleep should stop before full backoff duration"
+        );
     }
 }
