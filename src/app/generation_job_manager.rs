@@ -187,6 +187,7 @@ struct RunningJob {
     request_id: String,
     cancel_flag: Arc<AtomicBool>,
     cancelled_reported: bool,
+    task_handle: Option<thread::JoinHandle<()>>,
 }
 
 struct PendingJob {
@@ -202,10 +203,19 @@ fn worker_loop(
 ) {
     let mut in_flight: Option<RunningJob> = None;
     let mut pending_job: Option<PendingJob> = None;
+    let mut shutdown_requested = false;
 
     while let Ok(message) = command_rx.recv() {
         match message {
             WorkerMessage::Start { job_id, request } => {
+                if shutdown_requested {
+                    push_update(
+                        &shared,
+                        GenerationJobUpdate::cancelled(job_id, request.request_id),
+                    );
+                    continue;
+                }
+
                 if let Some(active) = in_flight.as_mut() {
                     active.cancel_flag.store(true, Ordering::SeqCst);
                     if !active.cancelled_reported {
@@ -284,6 +294,15 @@ fn worker_loop(
                     }
                 }
 
+                join_generation_task(&mut finished_job);
+
+                if shutdown_requested {
+                    if in_flight.is_none() {
+                        break;
+                    }
+                    continue;
+                }
+
                 if let Some(next) = pending_job.take() {
                     in_flight = Some(spawn_generation_job(
                         &service,
@@ -317,6 +336,8 @@ fn worker_loop(
                 }
             }
             WorkerMessage::Shutdown => {
+                shutdown_requested = true;
+
                 if let Some(active) = in_flight.as_mut() {
                     active.cancel_flag.store(true, Ordering::SeqCst);
                     if !active.cancelled_reported {
@@ -337,7 +358,10 @@ fn worker_loop(
                         GenerationJobUpdate::cancelled(next.job_id, next.request.request_id),
                     );
                 }
-                break;
+
+                if in_flight.is_none() {
+                    break;
+                }
             }
         }
     }
@@ -357,7 +381,7 @@ fn spawn_generation_job(
     let service_for_thread = service.clone();
     let request_id_for_thread = request_id.clone();
 
-    thread::spawn(move || {
+    let task_handle = thread::spawn(move || {
         if cancel_for_thread.load(Ordering::SeqCst) {
             let _ = tx_for_thread.send(WorkerMessage::Completion {
                 job_id,
@@ -389,6 +413,13 @@ fn spawn_generation_job(
         request_id,
         cancel_flag,
         cancelled_reported: false,
+        task_handle: Some(task_handle),
+    }
+}
+
+fn join_generation_task(job: &mut RunningJob) {
+    if let Some(task_handle) = job.task_handle.take() {
+        let _ = task_handle.join();
     }
 }
 
@@ -526,6 +557,27 @@ mod tests {
             thread::sleep(self.call_delay);
             self.active_calls.fetch_sub(1, Ordering::SeqCst);
 
+            Ok(valid_result(&request.request_id))
+        }
+    }
+
+    struct SlowCompletionProvider {
+        delay: Duration,
+        completed: Arc<AtomicBool>,
+    }
+
+    impl LlmProvider for SlowCompletionProvider {
+        fn provider_id(&self) -> &str {
+            "anthropic"
+        }
+
+        fn supports_model(&self, model_id: &str) -> bool {
+            model_id == "claude-3-5-sonnet"
+        }
+
+        fn generate(&self, request: &GenerationRequest) -> Result<GenerationResult, LlmError> {
+            thread::sleep(self.delay);
+            self.completed.store(true, Ordering::SeqCst);
             Ok(valid_result(&request.request_id))
         }
     }
@@ -869,5 +921,38 @@ mod tests {
                 && update.request_id == "req-3"
                 && update.state == GenerationJobState::Succeeded
         }));
+    }
+
+    #[test]
+    fn drop_waits_for_in_flight_generation_thread_to_finish() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let provider = Arc::new(SlowCompletionProvider {
+            delay: Duration::from_millis(150),
+            completed: Arc::clone(&completed),
+        });
+        let manager = manager_with_provider(provider);
+
+        manager
+            .submit_generate(valid_request("req-drop"))
+            .expect("submit should succeed");
+
+        wait_for(
+            &manager,
+            |state| state == GenerationJobState::Running || state == GenerationJobState::Succeeded,
+            Duration::from_millis(300),
+        );
+
+        let drop_started_at = Instant::now();
+        drop(manager);
+        let drop_elapsed = drop_started_at.elapsed();
+
+        assert!(
+            completed.load(Ordering::SeqCst),
+            "drop should only return after generation thread completion"
+        );
+        assert!(
+            drop_elapsed >= Duration::from_millis(100),
+            "drop should wait for in-flight generation thread"
+        );
     }
 }
