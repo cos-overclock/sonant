@@ -381,10 +381,7 @@ impl Render for SonantMainWindow {
                                 "Generate"
                             })
                             .loading(generating)
-                            .disabled(matches!(
-                                self.generation_status,
-                                HelperGenerationStatus::Submitting { .. }
-                            ))
+                            .disabled(generating)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_generate_clicked(window, cx)
                             })),
