@@ -60,10 +60,11 @@ const PROMPT_VALIDATION_MESSAGE: &str = "Prompt must not be empty.";
 const STUB_PROVIDER_NOTICE: &str = "No LLM provider is configured. Set SONANT_ANTHROPIC_API_KEY or SONANT_OPENAI_COMPAT_API_KEY to enable real generation requests.";
 const TEST_API_KEY_BACKEND_NOTICE: &str = "Using API key from helper input for Anthropic backend.";
 const API_KEY_PLACEHOLDER: &str = "Anthropic API key (testing only)";
-const MIDI_SLOT_FILE_PICKER_PROMPT: &str = "Select MIDI File";
+const MIDI_SLOT_FILE_PICKER_PROMPT: &str = "Select MIDI File (.mid/.midi)";
 const MIDI_SLOT_DROP_HINT: &str = "Drop a .mid/.midi file here or choose one from the dialog.";
 const MIDI_SLOT_EMPTY_LABEL: &str = "Not set";
 const MIDI_SLOT_DROP_ERROR_MESSAGE: &str = "Drop at least one file to set the MIDI reference.";
+const MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE: &str = "Only .mid or .midi files are supported.";
 const DEBUG_PROMPT_LOG_ENV: &str = "SONANT_HELPER_DEBUG_PROMPT_LOG";
 const DEBUG_PROMPT_PREVIEW_CHARS: usize = 120;
 
@@ -287,6 +288,7 @@ impl SonantMainWindow {
     }
 
     fn on_select_midi_file_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // NOTE: gpui::PathPromptOptions (v0.2.2) does not expose extension-based file filters.
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -303,9 +305,16 @@ impl SonantMainWindow {
             match result {
                 Ok(Some(paths)) => {
                     if let Some(path) = paths.into_iter().next() {
-                        let path = path.to_string_lossy().to_string();
                         let _ = view.update_in(window, |view, _window, cx| {
-                            view.set_midi_slot_file(path, cx)
+                            if !has_supported_midi_extension(&path) {
+                                view.midi_slot_error =
+                                    Some(MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE.to_string());
+                                cx.notify();
+                                return;
+                            }
+
+                            let path = path.to_string_lossy().to_string();
+                            view.set_midi_slot_file(path, cx);
                         });
                     }
                 }
