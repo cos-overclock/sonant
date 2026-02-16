@@ -14,10 +14,12 @@ use gpui_component::{
 };
 use sonant::{
     app::{
-        GenerationJobManager, GenerationJobState, GenerationJobUpdate, LoadMidiCommand,
-        LoadMidiUseCase,
+        ChannelMapping, GenerationJobManager, GenerationJobState, GenerationJobUpdate,
+        InputTrackModel, LoadMidiCommand, LoadMidiUseCase,
     },
-    domain::{GenerationMode, LlmError, ReferenceSlot, has_supported_midi_extension},
+    domain::{
+        GenerationMode, LlmError, ReferenceSlot, ReferenceSource, has_supported_midi_extension,
+    },
 };
 
 use super::backend::{
@@ -39,6 +41,9 @@ use super::{
     PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
 };
 
+const MIDI_CHANNEL_MIN: u8 = 1;
+const MIDI_CHANNEL_MAX: u8 = 16;
+
 pub(super) struct SonantMainWindow {
     prompt_input: Entity<InputState>,
     _prompt_input_subscription: Subscription,
@@ -47,11 +52,14 @@ pub(super) struct SonantMainWindow {
     load_midi_use_case: Arc<LoadMidiUseCase>,
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
+    input_track_model: InputTrackModel,
+    recording_channel_enabled: [bool; 16],
     selected_generation_mode: GenerationMode,
     selected_reference_slot: ReferenceSlot,
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     api_key_error: Option<String>,
+    input_track_error: Option<String>,
     midi_slot_errors: Vec<MidiSlotErrorState>,
     active_test_api_key: Option<String>,
     startup_notice: Option<String>,
@@ -87,11 +95,14 @@ impl SonantMainWindow {
             load_midi_use_case: Arc::new(LoadMidiUseCase::new()),
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
+            input_track_model: InputTrackModel::new(),
+            recording_channel_enabled: [false; 16],
             selected_generation_mode: GenerationMode::Melody,
             selected_reference_slot: ReferenceSlot::Melody,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             api_key_error: None,
+            input_track_error: None,
             midi_slot_errors: Vec::new(),
             active_test_api_key: None,
             startup_notice: backend.startup_notice,
@@ -258,11 +269,176 @@ impl SonantMainWindow {
         }
     }
 
+    fn reference_source_label(source: ReferenceSource) -> &'static str {
+        match source {
+            ReferenceSource::File => "File",
+            ReferenceSource::Live => "Live",
+        }
+    }
+
+    fn reference_slot_index(slot: ReferenceSlot) -> usize {
+        match slot {
+            ReferenceSlot::Melody => 0,
+            ReferenceSlot::ChordProgression => 1,
+            ReferenceSlot::DrumPattern => 2,
+            ReferenceSlot::Bassline => 3,
+            ReferenceSlot::CounterMelody => 4,
+            ReferenceSlot::Harmony => 5,
+            ReferenceSlot::ContinuationSeed => 6,
+        }
+    }
+
+    fn reference_source_index(source: ReferenceSource) -> usize {
+        match source {
+            ReferenceSource::File => 0,
+            ReferenceSource::Live => 1,
+        }
+    }
+
+    fn input_track_row_id(slot: ReferenceSlot) -> (&'static str, usize) {
+        ("input-track-row", Self::reference_slot_index(slot))
+    }
+
+    fn input_track_source_button_id(
+        slot: ReferenceSlot,
+        source: ReferenceSource,
+    ) -> (&'static str, usize) {
+        (
+            "input-track-source",
+            Self::reference_slot_index(slot) * 2 + Self::reference_source_index(source),
+        )
+    }
+
+    fn input_track_channel_button_id(slot: ReferenceSlot, channel: u8) -> (&'static str, usize) {
+        (
+            "input-track-channel",
+            Self::reference_slot_index(slot) * 100 + usize::from(channel),
+        )
+    }
+
+    fn input_track_slot_select_button_id(slot: ReferenceSlot) -> (&'static str, usize) {
+        ("input-track-select", Self::reference_slot_index(slot))
+    }
+
+    fn recording_channel_button_id(channel: u8) -> (&'static str, usize) {
+        ("recording-channel", usize::from(channel))
+    }
+
     fn on_reference_slot_selected(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
         if self.selected_reference_slot != slot {
             self.selected_reference_slot = slot;
             cx.notify();
         }
+    }
+
+    fn source_for_slot(&self, slot: ReferenceSlot) -> ReferenceSource {
+        self.input_track_model.source_for_slot(slot)
+    }
+
+    fn channel_mapping_for_slot(&self, slot: ReferenceSlot) -> Option<u8> {
+        self.input_track_model
+            .channel_mappings()
+            .iter()
+            .find(|mapping| mapping.slot == slot)
+            .map(|mapping| mapping.channel)
+    }
+
+    fn recording_enabled_for_channel(&self, channel: u8) -> bool {
+        if !(MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX).contains(&channel) {
+            return false;
+        }
+        let index = usize::from(channel - MIDI_CHANNEL_MIN);
+        self.recording_channel_enabled[index]
+    }
+
+    fn live_channel_used_by_other_slots(&self, slot: ReferenceSlot, channel: u8) -> bool {
+        live_channel_used_by_other_slots(&self.input_track_model, slot, channel)
+    }
+
+    fn first_available_live_channel_for_slot(&self, slot: ReferenceSlot) -> Option<u8> {
+        first_available_live_channel_for_slot(&self.input_track_model, slot)
+    }
+
+    fn ensure_live_channel_mapping_for_slot(&mut self, slot: ReferenceSlot) -> Result<(), String> {
+        let target_channel = preferred_live_channel_for_slot(&self.input_track_model, slot)
+            .or_else(|| self.first_available_live_channel_for_slot(slot))
+            .ok_or_else(|| {
+                format!(
+                    "No free MIDI channel is available for {}.",
+                    Self::reference_slot_label(slot)
+                )
+            })?;
+
+        self.input_track_model
+            .set_channel_mapping(ChannelMapping {
+                slot,
+                channel: target_channel,
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn on_reference_source_selected(
+        &mut self,
+        slot: ReferenceSlot,
+        source: ReferenceSource,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_track_error = None;
+
+        if self.source_for_slot(slot) == source {
+            return;
+        }
+
+        if source == ReferenceSource::Live
+            && let Err(message) = self.ensure_live_channel_mapping_for_slot(slot)
+        {
+            self.input_track_error = Some(message);
+            cx.notify();
+            return;
+        }
+
+        if let Err(error) = self.input_track_model.set_source_for_slot(slot, source) {
+            self.input_track_error = Some(error.to_string());
+        } else {
+            self.selected_reference_slot = slot;
+        }
+
+        cx.notify();
+    }
+
+    fn on_live_channel_selected(
+        &mut self,
+        slot: ReferenceSlot,
+        channel: u8,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_track_error = None;
+
+        if self.source_for_slot(slot) != ReferenceSource::Live {
+            return;
+        }
+        if self.live_channel_used_by_other_slots(slot, channel) {
+            return;
+        }
+
+        if let Err(error) = self
+            .input_track_model
+            .set_channel_mapping(ChannelMapping { slot, channel })
+        {
+            self.input_track_error = Some(error.to_string());
+        }
+
+        cx.notify();
+    }
+
+    fn on_recording_channel_toggled(&mut self, channel: u8, cx: &mut Context<Self>) {
+        if !(MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX).contains(&channel) {
+            return;
+        }
+
+        let index = usize::from(channel - MIDI_CHANNEL_MIN);
+        self.recording_channel_enabled[index] = !self.recording_channel_enabled[index];
+        cx.notify();
     }
 
     fn upsert_midi_slot_error(&mut self, error: MidiSlotErrorState) {
@@ -307,6 +483,15 @@ impl SonantMainWindow {
     }
 
     fn on_select_midi_file_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.source_for_slot(self.selected_reference_slot) != ReferenceSource::File {
+            self.input_track_error = Some(format!(
+                "{} is set to Live input. Switch source to File to load MIDI files.",
+                Self::reference_slot_label(self.selected_reference_slot)
+            ));
+            cx.notify();
+            return;
+        }
+
         // NOTE: gpui::PathPromptOptions (v0.2.2) does not expose extension-based file filters.
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -357,6 +542,14 @@ impl SonantMainWindow {
 
     fn on_midi_slot_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
         let slot = self.selected_reference_slot;
+        if self.source_for_slot(slot) != ReferenceSource::File {
+            self.input_track_error = Some(format!(
+                "{} is set to Live input. Switch source to File to load dropped MIDI files.",
+                Self::reference_slot_label(slot)
+            ));
+            cx.notify();
+            return;
+        }
         let Some(path) = dropped_path_to_load(paths) else {
             self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
                 slot,
@@ -486,6 +679,34 @@ impl SonantMainWindow {
     }
 }
 
+fn live_channel_used_by_other_slots(
+    model: &InputTrackModel,
+    slot: ReferenceSlot,
+    channel: u8,
+) -> bool {
+    model
+        .live_channel_mappings()
+        .iter()
+        .any(|mapping| mapping.slot != slot && mapping.channel == channel)
+}
+
+fn first_available_live_channel_for_slot(
+    model: &InputTrackModel,
+    slot: ReferenceSlot,
+) -> Option<u8> {
+    (MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX)
+        .find(|channel| !live_channel_used_by_other_slots(model, slot, *channel))
+}
+
+fn preferred_live_channel_for_slot(model: &InputTrackModel, slot: ReferenceSlot) -> Option<u8> {
+    model
+        .channel_mappings()
+        .iter()
+        .find(|mapping| mapping.slot == slot)
+        .map(|mapping| mapping.channel)
+        .filter(|channel| !live_channel_used_by_other_slots(model, slot, *channel))
+}
+
 impl Render for SonantMainWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status_label = self.generation_status.label();
@@ -494,6 +715,11 @@ impl Render for SonantMainWindow {
         let selected_mode_label = Self::generation_mode_label(self.selected_generation_mode);
         let selected_reference_slot_label =
             Self::reference_slot_label(self.selected_reference_slot);
+        let selected_reference_source = self.source_for_slot(self.selected_reference_slot);
+        let selected_reference_source_label =
+            Self::reference_source_label(selected_reference_source);
+        let selected_live_channel = self.channel_mapping_for_slot(self.selected_reference_slot);
+        let selected_slot_accepts_file_drop = selected_reference_source == ReferenceSource::File;
         let references = self.load_midi_use_case.snapshot_references();
         let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
         let mode_requirement_satisfied =
@@ -674,6 +900,289 @@ impl Render for SonantMainWindow {
                             .child(slot_button(ReferenceSlot::ContinuationSeed)),
                     ),
             )
+            .child(Label::new("Input Tracks"))
+            .child(
+                div()
+                    .id("input-track-list")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(Self::reference_slots().iter().copied().map(|slot| {
+                        let slot_label = Self::reference_slot_label(slot);
+                        let slot_source = self.source_for_slot(slot);
+                        let slot_channel = self.channel_mapping_for_slot(slot);
+                        let slot_is_selected = self.selected_reference_slot == slot;
+                        let select_button = Button::new(Self::input_track_slot_select_button_id(slot))
+                            .label(if slot_is_selected { "Selected" } else { "Select Slot" })
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                this.on_reference_slot_selected(slot, cx)
+                            }));
+                        let select_button = if slot_is_selected {
+                            select_button.primary()
+                        } else {
+                            select_button
+                        };
+                        div()
+                            .id(Self::input_track_row_id(slot))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .p_3()
+                            .border_1()
+                            .border_color(if slot_is_selected {
+                                rgb(0x67e8f9)
+                            } else {
+                                rgb(0x334155)
+                            })
+                            .bg(if slot_is_selected {
+                                rgb(0x082f49)
+                            } else {
+                                rgb(0x0f172a)
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(div().text_color(rgb(0x93c5fd)).child(slot_label))
+                                    .child(select_button),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        if slot_source == ReferenceSource::File {
+                                            Button::new(Self::input_track_source_button_id(
+                                                slot,
+                                                ReferenceSource::File,
+                                            ))
+                                            .label("File")
+                                            .primary()
+                                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                                this.on_reference_source_selected(
+                                                    slot,
+                                                    ReferenceSource::File,
+                                                    cx,
+                                                )
+                                            }))
+                                        } else {
+                                            Button::new(Self::input_track_source_button_id(
+                                                slot,
+                                                ReferenceSource::File,
+                                            ))
+                                            .label("File")
+                                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                                this.on_reference_source_selected(
+                                                    slot,
+                                                    ReferenceSource::File,
+                                                    cx,
+                                                )
+                                            }))
+                                        },
+                                    )
+                                    .child(
+                                        if slot_source == ReferenceSource::Live {
+                                            Button::new(Self::input_track_source_button_id(
+                                                slot,
+                                                ReferenceSource::Live,
+                                            ))
+                                            .label("Live")
+                                            .primary()
+                                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                                this.on_reference_source_selected(
+                                                    slot,
+                                                    ReferenceSource::Live,
+                                                    cx,
+                                                )
+                                            }))
+                                        } else {
+                                            Button::new(Self::input_track_source_button_id(
+                                                slot,
+                                                ReferenceSource::Live,
+                                            ))
+                                            .label("Live")
+                                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                                this.on_reference_source_selected(
+                                                    slot,
+                                                    ReferenceSource::Live,
+                                                    cx,
+                                                )
+                                            }))
+                                        },
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0x94a3b8))
+                                            .child(format!("Source: {}", Self::reference_source_label(slot_source))),
+                                    ),
+                            )
+                            .child(
+                                div().text_color(rgb(0x94a3b8)).child(format!(
+                                    "Assigned Live Channel: {}",
+                                    slot_channel
+                                        .map(|channel| channel.to_string())
+                                        .unwrap_or_else(|| "Not set".to_string())
+                                )),
+                            )
+                            .children(
+                                std::iter::once(slot_source)
+                                    .filter(|source| *source == ReferenceSource::Live)
+                                    .map(|_| {
+                                        let selected_channel = slot_channel;
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .child(
+                                                div().text_color(rgb(0x93c5fd)).child(format!(
+                                                    "Live Channel: {}",
+                                                    selected_channel
+                                                        .map(|channel| channel.to_string())
+                                                        .unwrap_or_else(|| "Not set".to_string())
+                                                )),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .children((1..=8).map(|channel| {
+                                                        let channel = channel as u8;
+                                                        let disabled = self
+                                                            .live_channel_used_by_other_slots(slot, channel);
+                                                        let button = Button::new(
+                                                            Self::input_track_channel_button_id(
+                                                                slot, channel,
+                                                            ),
+                                                        )
+                                                        .label(if disabled {
+                                                            format!("{channel}*")
+                                                        } else {
+                                                            channel.to_string()
+                                                        })
+                                                        .disabled(disabled)
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _window, cx| {
+                                                                this.on_live_channel_selected(
+                                                                    slot, channel, cx,
+                                                                )
+                                                            },
+                                                        ));
+                                                        if selected_channel == Some(channel) {
+                                                            button.primary()
+                                                        } else {
+                                                            button
+                                                        }
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .children((9..=16).map(|channel| {
+                                                        let channel = channel as u8;
+                                                        let disabled = self
+                                                            .live_channel_used_by_other_slots(slot, channel);
+                                                        let button = Button::new(
+                                                            Self::input_track_channel_button_id(
+                                                                slot, channel,
+                                                            ),
+                                                        )
+                                                        .label(if disabled {
+                                                            format!("{channel}*")
+                                                        } else {
+                                                            channel.to_string()
+                                                        })
+                                                        .disabled(disabled)
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _window, cx| {
+                                                                this.on_live_channel_selected(
+                                                                    slot, channel, cx,
+                                                                )
+                                                            },
+                                                        ));
+                                                        if selected_channel == Some(channel) {
+                                                            button.primary()
+                                                        } else {
+                                                            button
+                                                        }
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(0x94a3b8))
+                                                    .child("`*` means already used by another Live slot."),
+                                            )
+                                    }),
+                            )
+                    })),
+            )
+            .children(self.input_track_error.iter().map(|message| {
+                div()
+                    .text_color(rgb(0xfca5a5))
+                    .child(format!("Input Tracks: {message}"))
+            }))
+            .child(Label::new("MIDI Channel Recording"))
+            .child(
+                div()
+                    .id("recording-channel-panel")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .border_1()
+                    .border_color(rgb(0x334155))
+                    .bg(rgb(0x0f172a))
+                    .child(
+                        div()
+                            .text_color(rgb(0x94a3b8))
+                            .child("Toggle recording capture per MIDI Channel."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .children((1..=8).map(|channel| {
+                                let channel = channel as u8;
+                                let enabled = self.recording_enabled_for_channel(channel);
+                                let button = Button::new(Self::recording_channel_button_id(channel))
+                                    .label(if enabled {
+                                        format!("Ch {channel} ON")
+                                    } else {
+                                        format!("Ch {channel} OFF")
+                                    })
+                                    .on_click(cx.listener(move |this, _, _window, cx| {
+                                        this.on_recording_channel_toggled(channel, cx)
+                                    }));
+                                if enabled { button.primary() } else { button }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .children((9..=16).map(|channel| {
+                                let channel = channel as u8;
+                                let enabled = self.recording_enabled_for_channel(channel);
+                                let button = Button::new(Self::recording_channel_button_id(channel))
+                                    .label(if enabled {
+                                        format!("Ch {channel} ON")
+                                    } else {
+                                        format!("Ch {channel} OFF")
+                                    })
+                                    .on_click(cx.listener(move |this, _, _window, cx| {
+                                        this.on_recording_channel_toggled(channel, cx)
+                                    }));
+                                if enabled { button.primary() } else { button }
+                            })),
+                    ),
+            )
             .child(Label::new("Reference Slot Overview"))
             .child(
                 div()
@@ -687,6 +1196,8 @@ impl Render for SonantMainWindow {
                             .filter(|reference| reference.slot == slot)
                             .collect();
                         let slot_reference_count = slot_references.len();
+                        let slot_source = self.source_for_slot(slot);
+                        let slot_channel = self.channel_mapping_for_slot(slot);
                         div()
                             .flex()
                             .flex_col()
@@ -704,10 +1215,33 @@ impl Render for SonantMainWindow {
                                 rgb(0x0f172a)
                             })
                             .child(div().text_color(rgb(0x93c5fd)).child(Self::reference_slot_label(slot)))
+                            .child(
+                                div()
+                                    .text_color(rgb(0x94a3b8))
+                                    .child(format!("Source: {}", Self::reference_source_label(slot_source))),
+                            )
+                            .children(std::iter::once(slot_source).filter_map(|source| {
+                                if source == ReferenceSource::Live {
+                                    Some(
+                                        div()
+                                            .text_color(rgb(0x94a3b8))
+                                            .child(format!(
+                                                "Live Channel: {}",
+                                                slot_channel
+                                                    .map(|channel| channel.to_string())
+                                                    .unwrap_or_else(|| "Not set".to_string())
+                                            )),
+                                    )
+                                } else {
+                                    None
+                                }
+                            }))
                             .child(div().child(format!("Registered MIDI: {slot_reference_count}")))
                             .children(
-                                std::iter::once(slot_reference_count)
-                                    .filter(|count| *count == 0)
+                                std::iter::once((slot_reference_count, slot_source))
+                                    .filter(|(count, source)| {
+                                        *count == 0 && *source == ReferenceSource::File
+                                    })
                                     .map(|_| div().child(format!("File: {MIDI_SLOT_EMPTY_LABEL}"))),
                             )
                             .children(
@@ -742,7 +1276,7 @@ impl Render for SonantMainWindow {
                     })),
             )
             .child(Label::new(format!(
-                "Reference MIDI ({selected_reference_slot_label} Slot)"
+                "Reference MIDI ({selected_reference_slot_label} Slot / Source: {selected_reference_source_label})"
             )))
             .child(
                 div()
@@ -754,13 +1288,16 @@ impl Render for SonantMainWindow {
                     .border_1()
                     .border_color(rgb(0x334155))
                     .bg(rgb(0x0f172a))
-                    .can_drop(|value, _, _| {
-                        value
-                            .downcast_ref::<ExternalPaths>()
-                            .is_some_and(|paths| !paths.paths().is_empty())
+                    .can_drop(move |value, _, _| {
+                        selected_slot_accepts_file_drop
+                            && value
+                                .downcast_ref::<ExternalPaths>()
+                                .is_some_and(|paths| !paths.paths().is_empty())
                     })
-                    .drag_over::<ExternalPaths>(|style, paths, _, _| {
-                        if choose_dropped_midi_path(paths.paths()).is_some() {
+                    .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                        if !selected_slot_accepts_file_drop {
+                            style.border_color(rgb(0x334155)).bg(rgb(0x0f172a))
+                        } else if choose_dropped_midi_path(paths.paths()).is_some() {
                             style.border_color(rgb(0x67e8f9)).bg(rgb(0x082f49))
                         } else {
                             style.border_color(rgb(0xfda4af)).bg(rgb(0x3f1d2e))
@@ -769,15 +1306,39 @@ impl Render for SonantMainWindow {
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
                         this.on_midi_slot_drop(paths, cx)
                     }))
-                    .child(div().child(format!(
-                        "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label} (appends to this slot)."
-                    )))
+                    .child(if selected_slot_accepts_file_drop {
+                        div().child(format!(
+                            "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label} (appends to this slot)."
+                        ))
+                    } else {
+                        div().child(format!(
+                            "{selected_reference_slot_label} is using Live input. Switch source to File to load MIDI files."
+                        ))
+                    })
+                    .children(std::iter::once(selected_live_channel).filter_map(|channel| {
+                        if selected_reference_source == ReferenceSource::Live {
+                            Some(
+                                div()
+                                    .text_color(rgb(0x93c5fd))
+                                    .child(format!(
+                                        "Live Channel: {}",
+                                        channel
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_else(|| "Not set".to_string())
+                                    )),
+                            )
+                        } else {
+                            None
+                        }
+                    }))
                     .child(div().child(format!(
                         "Registered MIDI in slot: {selected_slot_reference_count}"
                     )))
                     .children(
-                        std::iter::once(selected_slot_reference_count)
-                            .filter(|count| *count == 0)
+                        std::iter::once((selected_slot_reference_count, selected_reference_source))
+                            .filter(|(count, source)| {
+                                *count == 0 && *source == ReferenceSource::File
+                            })
                             .map(|_| div().child(format!("File: {MIDI_SLOT_EMPTY_LABEL}"))),
                     )
                     .children(
@@ -818,6 +1379,7 @@ impl Render for SonantMainWindow {
                             .child(
                                 Button::new("midi-slot-select-button")
                                     .label("Select MIDI File")
+                                    .disabled(!selected_slot_accepts_file_drop)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.on_select_midi_file_clicked(window, cx)
                                     })),
@@ -825,7 +1387,7 @@ impl Render for SonantMainWindow {
                             .child(
                                 Button::new("midi-slot-clear-button")
                                     .label("Clear Slot")
-                                    .disabled(!selected_slot_set)
+                                    .disabled(!selected_slot_set || !selected_slot_accepts_file_drop)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.on_clear_midi_slot_clicked(cx)
                                     })),
@@ -835,6 +1397,7 @@ impl Render for SonantMainWindow {
             .children(selected_slot_error.into_iter().map(|error| {
                 let slot_label = Self::reference_slot_label(error.slot);
                 let retry_slot = error.slot;
+                let slot_is_file_source = self.source_for_slot(error.slot) == ReferenceSource::File;
                 div()
                     .flex()
                     .flex_col()
@@ -852,7 +1415,7 @@ impl Render for SonantMainWindow {
                             .child(
                                 Button::new("midi-slot-retry-button")
                                     .label("Retry")
-                                    .disabled(!error.can_retry())
+                                    .disabled(!error.can_retry() || !slot_is_file_source)
                                     .on_click(cx.listener(move |this, _, _window, cx| {
                                         this.on_retry_midi_slot_clicked(retry_slot, cx)
                                     })),
@@ -860,6 +1423,7 @@ impl Render for SonantMainWindow {
                             .child(
                                 Button::new("midi-slot-reselect-button")
                                     .label("Choose Another File")
+                                    .disabled(!slot_is_file_source)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.on_select_midi_file_clicked(window, cx)
                                     })),
@@ -900,5 +1464,76 @@ impl Render for SonantMainWindow {
                     .text_color(rgb(0x93c5fd))
                     .child(format!("Backend: {notice}"))
             }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        first_available_live_channel_for_slot, live_channel_used_by_other_slots,
+        preferred_live_channel_for_slot,
+    };
+    use sonant::app::{ChannelMapping, InputTrackModel};
+    use sonant::domain::{ReferenceSlot, ReferenceSource};
+
+    #[test]
+    fn used_channel_is_excluded_only_for_other_live_slots() {
+        let mut model = InputTrackModel::new();
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("melody should switch to live");
+        model
+            .set_source_for_slot(ReferenceSlot::ChordProgression, ReferenceSource::Live)
+            .expect("chord should switch to live");
+
+        assert!(!live_channel_used_by_other_slots(
+            &model,
+            ReferenceSlot::Melody,
+            1
+        ));
+        assert!(live_channel_used_by_other_slots(
+            &model,
+            ReferenceSlot::Melody,
+            2
+        ));
+    }
+
+    #[test]
+    fn first_available_live_channel_skips_channels_used_by_live_slots() {
+        let mut model = InputTrackModel::new();
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("melody should switch to live");
+        model
+            .set_source_for_slot(ReferenceSlot::ChordProgression, ReferenceSource::Live)
+            .expect("chord should switch to live");
+
+        assert_eq!(
+            first_available_live_channel_for_slot(&model, ReferenceSlot::CounterMelody),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn conflicting_preferred_channel_returns_none_for_recovery() {
+        let mut model = InputTrackModel::new();
+        model
+            .set_channel_mapping(ChannelMapping {
+                slot: ReferenceSlot::Melody,
+                channel: 3,
+            })
+            .expect("channel update should succeed");
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("melody should switch to live");
+
+        assert_eq!(
+            preferred_live_channel_for_slot(&model, ReferenceSlot::Bassline),
+            None
+        );
+        assert_eq!(
+            first_available_live_channel_for_slot(&model, ReferenceSlot::Bassline),
+            Some(1)
+        );
     }
 }
