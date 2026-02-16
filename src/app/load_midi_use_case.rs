@@ -3,10 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 
-use crate::domain::{FileReferenceInput, MidiReferenceSummary, ReferenceSlot, ReferenceSource};
+use crate::domain::{
+    FileReferenceInput, MidiReferenceSummary, ReferenceSlot, ReferenceSource,
+    calculate_reference_density_hint,
+};
 use crate::infra::midi::{MidiLoadError, MidiReferenceData, load_midi_reference};
-
-const DENSITY_NOTES_PER_BAR_AT_MAX_HINT: f32 = 32.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadMidiCommand {
@@ -244,7 +245,7 @@ fn build_reference_summary(
         file: Some(FileReferenceInput { path }),
         bars: data.summary.bars,
         note_count: data.summary.note_count,
-        density_hint: calculate_density_hint(data.summary.note_count, data.summary.bars),
+        density_hint: calculate_reference_density_hint(data.summary.note_count, data.summary.bars),
         min_pitch: data.summary.min_pitch,
         max_pitch: data.summary.max_pitch,
         events: data.events,
@@ -257,14 +258,6 @@ fn build_reference_summary(
         })?;
 
     Ok(reference)
-}
-
-fn calculate_density_hint(note_count: u32, bars: u16) -> f32 {
-    if bars == 0 {
-        return 1.0;
-    }
-    let notes_per_bar = note_count as f32 / f32::from(bars);
-    (notes_per_bar / DENSITY_NOTES_PER_BAR_AT_MAX_HINT).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

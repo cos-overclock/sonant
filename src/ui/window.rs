@@ -21,7 +21,7 @@ use sonant::{
     },
     domain::{
         GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary, ReferenceSlot,
-        ReferenceSource, has_supported_midi_extension,
+        ReferenceSource, calculate_reference_density_hint, has_supported_midi_extension,
     },
 };
 
@@ -46,7 +46,6 @@ use super::{
 
 const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
 const LIVE_CAPTURE_MAX_EVENTS_PER_POLL: usize = 512;
-const DENSITY_NOTES_PER_BAR_AT_MAX_HINT: f32 = 32.0;
 
 pub(super) struct SonantMainWindow {
     prompt_input: Entity<InputState>,
@@ -922,7 +921,7 @@ fn build_live_reference_summary(
         file: None,
         bars,
         note_count,
-        density_hint: calculate_density_hint(note_count, bars),
+        density_hint: calculate_reference_density_hint(note_count, bars),
         min_pitch,
         max_pitch,
         events: build_live_reference_events(events),
@@ -930,15 +929,6 @@ fn build_live_reference_summary(
 
     reference.validate().ok().map(|_| reference)
 }
-
-fn calculate_density_hint(note_count: u32, bars: u16) -> f32 {
-    if bars == 0 {
-        return 1.0;
-    }
-    let notes_per_bar = note_count as f32 / f32::from(bars);
-    (notes_per_bar / DENSITY_NOTES_PER_BAR_AT_MAX_HINT).clamp(0.0, 1.0)
-}
-
 fn build_live_reference_events(events: &[LiveInputEvent]) -> Vec<MidiReferenceEvent> {
     let mut absolute_tick = 0_u32;
     events
