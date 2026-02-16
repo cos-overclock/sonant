@@ -5,9 +5,10 @@ use std::mem::MaybeUninit;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::app::{LIVE_INPUT_IPC_SOCKET_ENV, LiveInputEvent, LiveInputIpcSender};
+use crate::app::LiveInputEvent;
+#[cfg(target_family = "unix")]
+use crate::app::{LIVE_INPUT_IPC_SOCKET_ENV, LiveInputIpcSender};
 
 use super::SonantPluginMainThread;
 
@@ -19,6 +20,7 @@ pub(super) struct SonantGuiController {
 #[derive(Default)]
 struct HelperState {
     child: Option<Child>,
+    #[cfg(target_family = "unix")]
     live_input_sender: Option<LiveInputIpcSender>,
     launched_at: Option<Instant>,
 }
@@ -96,31 +98,49 @@ impl SonantGuiController {
         let helper_path = resolve_helper_binary_path().ok_or(PluginError::Message(
             "Could not resolve SonantGUIHelper path",
         ))?;
-        let live_input_socket_path = helper_live_input_socket_path();
-        let live_input_sender = LiveInputIpcSender::new(&live_input_socket_path)
-            .map_err(|_| PluginError::Message("Failed to initialize helper live-input socket"))?;
-
-        let child = Command::new(helper_path)
+        let mut command = Command::new(helper_path);
+        command
             .arg("--gpui-helper")
-            .env(LIVE_INPUT_IPC_SOCKET_ENV, &live_input_socket_path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+
+        #[cfg(target_family = "unix")]
+        let live_input_sender = {
+            let live_input_socket_path = helper_live_input_socket_path();
+            let sender = LiveInputIpcSender::new(&live_input_socket_path).map_err(|_| {
+                PluginError::Message("Failed to initialize helper live-input socket")
+            })?;
+            command.env(LIVE_INPUT_IPC_SOCKET_ENV, &live_input_socket_path);
+            sender
+        };
+
+        let child = command
             .spawn()
             .map_err(|_| PluginError::Message("Failed to launch SonantGUIHelper"))?;
 
         self.state.child = Some(child);
-        self.state.live_input_sender = Some(live_input_sender);
+        #[cfg(target_family = "unix")]
+        {
+            self.state.live_input_sender = Some(live_input_sender);
+        }
         self.state.launched_at = Some(Instant::now());
         Ok(())
     }
 
     pub(super) fn send_live_input_events(&mut self, events: &[LiveInputEvent]) {
-        if events.is_empty() {
-            return;
+        #[cfg(not(target_family = "unix"))]
+        {
+            let _ = events;
         }
-        if let Some(sender) = self.state.live_input_sender.as_ref() {
-            sender.send_events(events);
+        #[cfg(target_family = "unix")]
+        {
+            if events.is_empty() {
+                return;
+            }
+            if let Some(sender) = self.state.live_input_sender.as_ref() {
+                sender.send_events(events);
+            }
         }
     }
 
@@ -173,7 +193,10 @@ fn reap_finished_helper(state: &mut HelperState) {
 
     if finished {
         state.child = None;
-        state.live_input_sender = None;
+        #[cfg(target_family = "unix")]
+        {
+            state.live_input_sender = None;
+        }
         state.launched_at = None;
     }
 }
@@ -183,19 +206,23 @@ fn stop_helper(state: &mut HelperState) {
         let _ = child.kill();
         let _ = child.wait();
     }
-    state.live_input_sender = None;
+    #[cfg(target_family = "unix")]
+    {
+        state.live_input_sender = None;
+    }
     state.launched_at = None;
 }
 
+#[cfg(target_family = "unix")]
 fn helper_live_input_socket_path() -> PathBuf {
+    use std::env::temp_dir;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    PathBuf::from(format!(
-        "/tmp/sonant-live-input-{}-{nonce:x}.sock",
-        std::process::id()
-    ))
+    temp_dir().join(format!("snt-live-in-{}-{nonce:x}.sock", std::process::id()))
 }
 
 fn resolve_helper_binary_path() -> Option<PathBuf> {
@@ -236,14 +263,15 @@ fn current_library_path() -> Option<PathBuf> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_family = "unix"))]
 mod tests {
     use super::helper_live_input_socket_path;
 
     #[test]
-    fn helper_live_input_socket_path_stays_within_macos_unix_socket_limit() {
+    fn helper_live_input_socket_path_uses_temp_dir_and_fits_unix_socket_limit() {
         // macOS accepts up to 104 bytes (including the NUL terminator) for sockaddr_un.sun_path.
         let path = helper_live_input_socket_path();
+        assert!(path.starts_with(std::env::temp_dir()));
         let path_len = path.to_string_lossy().len();
         assert!(
             path_len <= 103,
