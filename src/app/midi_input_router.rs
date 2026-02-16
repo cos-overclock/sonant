@@ -36,6 +36,12 @@ pub enum MidiInputRouterError {
     ZeroEventsPerBarCapacity,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LiveReferenceMetrics {
+    pub bar_count: usize,
+    pub event_count: usize,
+}
+
 pub struct MidiInputRouter {
     max_bars_per_slot: usize,
     max_events_per_bar: usize,
@@ -182,6 +188,26 @@ impl MidiInputRouter {
         }
         snapshot
     }
+
+    pub fn reference_metrics(&self, slot: ReferenceSlot) -> LiveReferenceMetrics {
+        let state = self
+            .state
+            .lock()
+            .expect("midi input router state lock poisoned while reading reference metrics");
+
+        let Some(slot_buffer) = state.slot_buffers.get(&slot) else {
+            return LiveReferenceMetrics::default();
+        };
+
+        LiveReferenceMetrics {
+            bar_count: slot_buffer.bars.len(),
+            event_count: slot_buffer
+                .bars
+                .values()
+                .map(std::collections::VecDeque::len)
+                .sum(),
+        }
+    }
 }
 
 impl Default for MidiInputRouter {
@@ -308,7 +334,7 @@ fn trim_old_bars(slot_buffer: &mut SlotBuffer, max_bars_per_slot: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MidiInputRouter, MidiInputRouterError};
+    use super::{LiveReferenceMetrics, MidiInputRouter, MidiInputRouterError};
     use crate::app::ChannelMapping;
     use crate::domain::ReferenceSlot;
 
@@ -532,6 +558,47 @@ mod tests {
         assert_eq!(
             router.snapshot_reference(ReferenceSlot::Melody),
             vec![bar1, bar2]
+        );
+    }
+
+    #[test]
+    fn reference_metrics_report_counts_for_recorded_slot() {
+        let router = MidiInputRouter::new();
+        router
+            .update_channel_mapping(vec![ChannelMapping {
+                slot: ReferenceSlot::Melody,
+                channel: 1,
+            }])
+            .expect("mapping should be valid");
+        router
+            .set_recording_channel_enabled(1, true)
+            .expect("channel 1 should be valid");
+
+        router.update_transport_state(true, 0.0);
+        router.push_live_event(1, note_on(1, 60));
+        router.push_live_event(1, note_on(1, 62));
+
+        router.update_transport_state(true, 4.0);
+        router.push_live_event(1, note_on(1, 64));
+
+        assert_eq!(
+            router.reference_metrics(ReferenceSlot::Melody),
+            LiveReferenceMetrics {
+                bar_count: 2,
+                event_count: 3
+            }
+        );
+    }
+
+    #[test]
+    fn reference_metrics_are_empty_for_unrecorded_slot() {
+        let router = MidiInputRouter::new();
+        assert_eq!(
+            router.reference_metrics(ReferenceSlot::Harmony),
+            LiveReferenceMetrics {
+                bar_count: 0,
+                event_count: 0
+            }
         );
     }
 

@@ -17,4 +17,4 @@ pub use load_midi_use_case::{
     FileMidiReferenceLoader, LoadMidiCommand, LoadMidiError, LoadMidiOutcome, LoadMidiUseCase,
     MidiReferenceLoader,
 };
-pub use midi_input_router::{MidiInputRouter, MidiInputRouterError};
+pub use midi_input_router::{LiveReferenceMetrics, MidiInputRouter, MidiInputRouterError};

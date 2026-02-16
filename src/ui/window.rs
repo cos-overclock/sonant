@@ -15,7 +15,8 @@ use gpui_component::{
 use sonant::{
     app::{
         ChannelMapping, GenerationJobManager, GenerationJobState, GenerationJobUpdate,
-        InputTrackModel, LoadMidiCommand, LoadMidiUseCase,
+        InputTrackModel, LiveInputEvent, LiveInputEventSource, LiveMidiCapture, LoadMidiCommand,
+        LoadMidiUseCase, MidiInputRouter,
     },
     domain::{
         GenerationMode, LlmError, ReferenceSlot, ReferenceSource, has_supported_midi_extension,
@@ -43,6 +44,8 @@ use super::{
 
 const MIDI_CHANNEL_MIN: u8 = 1;
 const MIDI_CHANNEL_MAX: u8 = 16;
+const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
+const LIVE_CAPTURE_MAX_EVENTS_PER_POLL: usize = 512;
 
 pub(super) struct SonantMainWindow {
     prompt_input: Entity<InputState>,
@@ -50,10 +53,13 @@ pub(super) struct SonantMainWindow {
     api_key_input: Entity<InputState>,
     _api_key_input_subscription: Subscription,
     load_midi_use_case: Arc<LoadMidiUseCase>,
+    live_midi_capture: LiveMidiCapture,
+    midi_input_router: MidiInputRouter,
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
     input_track_model: InputTrackModel,
     recording_channel_enabled: [bool; 16],
+    live_capture_playhead_ppq: f64,
     selected_generation_mode: GenerationMode,
     selected_reference_slot: ReferenceSlot,
     generation_status: HelperGenerationStatus,
@@ -64,6 +70,7 @@ pub(super) struct SonantMainWindow {
     active_test_api_key: Option<String>,
     startup_notice: Option<String>,
     _update_poll_task: Task<()>,
+    _live_capture_poll_task: Task<()>,
     _midi_file_picker_task: Task<()>,
 }
 
@@ -86,17 +93,24 @@ impl SonantMainWindow {
             cx.subscribe_in(&api_key_input, window, Self::on_api_key_input_event);
 
         let backend = build_generation_backend();
+        let input_track_model = InputTrackModel::new();
+        let recording_channel_enabled = [false; 16];
+        let live_midi_capture = LiveMidiCapture::new(Arc::new(NoopLiveInputSource));
+        let midi_input_router = MidiInputRouter::new();
 
-        Self {
+        let mut this = Self {
             prompt_input,
             _prompt_input_subscription: prompt_input_subscription,
             api_key_input,
             _api_key_input_subscription: api_key_input_subscription,
             load_midi_use_case: Arc::new(LoadMidiUseCase::new()),
+            live_midi_capture,
+            midi_input_router,
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
-            input_track_model: InputTrackModel::new(),
-            recording_channel_enabled: [false; 16],
+            input_track_model,
+            recording_channel_enabled,
+            live_capture_playhead_ppq: 0.0,
             selected_generation_mode: GenerationMode::Melody,
             selected_reference_slot: ReferenceSlot::Melody,
             generation_status: HelperGenerationStatus::Idle,
@@ -107,8 +121,14 @@ impl SonantMainWindow {
             active_test_api_key: None,
             startup_notice: backend.startup_notice,
             _update_poll_task: Task::ready(()),
+            _live_capture_poll_task: Task::ready(()),
             _midi_file_picker_task: Task::ready(()),
+        };
+        if let Err(error) = this.sync_midi_input_router_config() {
+            this.input_track_error = Some(error);
         }
+        this.start_live_capture_polling(window, cx);
+        this
     }
 
     fn on_prompt_input_event(
@@ -400,6 +420,9 @@ impl SonantMainWindow {
         if let Err(error) = self.input_track_model.set_source_for_slot(slot, source) {
             self.input_track_error = Some(error.to_string());
         } else {
+            if let Err(error) = self.sync_midi_input_router_config() {
+                self.input_track_error = Some(error);
+            }
             self.selected_reference_slot = slot;
         }
 
@@ -426,6 +449,8 @@ impl SonantMainWindow {
             .set_channel_mapping(ChannelMapping { slot, channel })
         {
             self.input_track_error = Some(error.to_string());
+        } else if let Err(error) = self.sync_midi_input_router_config() {
+            self.input_track_error = Some(error);
         }
 
         cx.notify();
@@ -438,6 +463,9 @@ impl SonantMainWindow {
 
         let index = usize::from(channel - MIDI_CHANNEL_MIN);
         self.recording_channel_enabled[index] = !self.recording_channel_enabled[index];
+        if let Err(error) = self.sync_midi_input_router_config() {
+            self.input_track_error = Some(error);
+        }
         cx.notify();
     }
 
@@ -462,6 +490,86 @@ impl SonantMainWindow {
         self.midi_slot_errors
             .iter()
             .find(|error| error.slot == slot)
+    }
+
+    fn sync_midi_input_router_config(&mut self) -> Result<(), String> {
+        self.midi_input_router
+            .update_channel_mapping(self.input_track_model.live_channel_mappings())
+            .map_err(|error| error.to_string())?;
+
+        for channel in MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX {
+            self.midi_input_router
+                .set_recording_channel_enabled(channel, self.recording_enabled_for_channel(channel))
+                .map_err(|error| error.to_string())?;
+        }
+
+        self.midi_input_router
+            .update_transport_state(true, self.live_capture_playhead_ppq);
+        Ok(())
+    }
+
+    fn start_live_capture_polling(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._live_capture_poll_task = cx.spawn_in(window, async move |view, window| {
+            loop {
+                Timer::after(Duration::from_millis(LIVE_CAPTURE_POLL_INTERVAL_MS)).await;
+                let keep_polling = match view.update_in(window, |view, _window, cx| {
+                    view.poll_live_capture_events(cx)
+                }) {
+                    Ok(keep_polling) => keep_polling,
+                    Err(_) => break,
+                };
+
+                if !keep_polling {
+                    break;
+                }
+            }
+        });
+    }
+
+    fn poll_live_capture_events(&mut self, cx: &mut Context<Self>) -> bool {
+        let _ = self.live_midi_capture.ingest_available();
+        let mut routed_any = false;
+
+        loop {
+            let events = self
+                .live_midi_capture
+                .poll_events(LIVE_CAPTURE_MAX_EVENTS_PER_POLL);
+            let event_count = events.len();
+            if event_count == 0 {
+                break;
+            }
+
+            self.route_live_events_to_router(events);
+            routed_any = true;
+
+            if event_count < LIVE_CAPTURE_MAX_EVENTS_PER_POLL {
+                break;
+            }
+        }
+
+        if routed_any {
+            cx.notify();
+        }
+
+        true
+    }
+
+    fn route_live_events_to_router(&mut self, events: Vec<LiveInputEvent>) {
+        self.midi_input_router
+            .update_transport_state(true, self.live_capture_playhead_ppq);
+
+        for event in events {
+            let Some(channel) = midi_channel_from_status(event.data[0]) else {
+                continue;
+            };
+            self.midi_input_router.push_live_event(channel, event);
+        }
+    }
+
+    fn live_recording_summary_for_slot(&self, slot: ReferenceSlot) -> LiveRecordingSummary {
+        let events = self.midi_input_router.snapshot_reference(slot);
+        let metrics = self.midi_input_router.reference_metrics(slot);
+        summarize_live_recording(&events, metrics.bar_count)
     }
 
     fn start_update_polling(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -679,6 +787,57 @@ impl SonantMainWindow {
     }
 }
 
+struct NoopLiveInputSource;
+
+impl LiveInputEventSource for NoopLiveInputSource {
+    fn try_pop_live_input_event(&self) -> Option<LiveInputEvent> {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct LiveRecordingSummary {
+    bar_count: usize,
+    event_count: usize,
+    note_count: usize,
+    min_pitch: Option<u8>,
+    max_pitch: Option<u8>,
+}
+
+fn summarize_live_recording(events: &[LiveInputEvent], bar_count: usize) -> LiveRecordingSummary {
+    let mut summary = LiveRecordingSummary {
+        bar_count,
+        event_count: events.len(),
+        ..Default::default()
+    };
+
+    for event in events {
+        if is_note_on_event(*event) {
+            summary.note_count += 1;
+            let pitch = event.data[1];
+            summary.min_pitch = Some(summary.min_pitch.map_or(pitch, |min| min.min(pitch)));
+            summary.max_pitch = Some(summary.max_pitch.map_or(pitch, |max| max.max(pitch)));
+        }
+    }
+
+    summary
+}
+
+fn is_note_on_event(event: LiveInputEvent) -> bool {
+    (event.data[0] & 0xF0) == 0x90 && event.data[2] > 0
+}
+
+fn midi_channel_from_status(status: u8) -> Option<u8> {
+    if (status & 0x80) == 0 {
+        return None;
+    }
+
+    match status & 0xF0 {
+        0x80 | 0x90 | 0xA0 | 0xB0 | 0xC0 | 0xD0 | 0xE0 => Some((status & 0x0F) + 1),
+        _ => None,
+    }
+}
+
 fn live_channel_used_by_other_slots(
     model: &InputTrackModel,
     slot: ReferenceSlot,
@@ -720,6 +879,8 @@ impl Render for SonantMainWindow {
             Self::reference_source_label(selected_reference_source);
         let selected_live_channel = self.channel_mapping_for_slot(self.selected_reference_slot);
         let selected_slot_accepts_file_drop = selected_reference_source == ReferenceSource::File;
+        let selected_live_recording_summary =
+            self.live_recording_summary_for_slot(self.selected_reference_slot);
         let references = self.load_midi_use_case.snapshot_references();
         let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
         let mode_requirement_satisfied =
@@ -911,6 +1072,7 @@ impl Render for SonantMainWindow {
                         let slot_label = Self::reference_slot_label(slot);
                         let slot_source = self.source_for_slot(slot);
                         let slot_channel = self.channel_mapping_for_slot(slot);
+                        let slot_live_summary = self.live_recording_summary_for_slot(slot);
                         let slot_is_selected = self.selected_reference_slot == slot;
                         let select_button = Button::new(Self::input_track_slot_select_button_id(slot))
                             .label(if slot_is_selected { "Selected" } else { "Select Slot" })
@@ -1032,10 +1194,32 @@ impl Render for SonantMainWindow {
                                     .filter(|source| *source == ReferenceSource::Live)
                                     .map(|_| {
                                         let selected_channel = slot_channel;
+                                        let live_summary = slot_live_summary;
                                         div()
                                             .flex()
                                             .flex_col()
                                             .gap_2()
+                                            .child(
+                                                div().text_color(rgb(0x93c5fd)).child(format!(
+                                                    "Recorded Bars: {} / Notes: {} / Events: {}",
+                                                    live_summary.bar_count,
+                                                    live_summary.note_count,
+                                                    live_summary.event_count
+                                                )),
+                                            )
+                                            .child(
+                                                div().text_color(rgb(0x94a3b8)).child(format!(
+                                                    "Pitch Range: {}",
+                                                    match (
+                                                        live_summary.min_pitch,
+                                                        live_summary.max_pitch,
+                                                    ) {
+                                                        (Some(min), Some(max)) =>
+                                                            format!("{min}..{max}"),
+                                                        _ => "N/A".to_string(),
+                                                    }
+                                                )),
+                                            )
                                             .child(
                                                 div().text_color(rgb(0x93c5fd)).child(format!(
                                                     "Live Channel: {}",
@@ -1198,6 +1382,7 @@ impl Render for SonantMainWindow {
                         let slot_reference_count = slot_references.len();
                         let slot_source = self.source_for_slot(slot);
                         let slot_channel = self.channel_mapping_for_slot(slot);
+                        let slot_live_summary = self.live_recording_summary_for_slot(slot);
                         div()
                             .flex()
                             .flex_col()
@@ -1224,19 +1409,38 @@ impl Render for SonantMainWindow {
                                 if source == ReferenceSource::Live {
                                     Some(
                                         div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
                                             .text_color(rgb(0x94a3b8))
                                             .child(format!(
                                                 "Live Channel: {}",
                                                 slot_channel
                                                     .map(|channel| channel.to_string())
                                                     .unwrap_or_else(|| "Not set".to_string())
+                                            ))
+                                            .child(format!(
+                                                "Recorded Bars: {} / Notes: {} / Events: {}",
+                                                slot_live_summary.bar_count,
+                                                slot_live_summary.note_count,
+                                                slot_live_summary.event_count
+                                            ))
+                                            .child(format!(
+                                                "Pitch Range: {}",
+                                                match (
+                                                    slot_live_summary.min_pitch,
+                                                    slot_live_summary.max_pitch,
+                                                ) {
+                                                    (Some(min), Some(max)) => format!("{min}..{max}"),
+                                                    _ => "N/A".to_string(),
+                                                }
                                             )),
                                     )
                                 } else {
                                     None
                                 }
                             }))
-                            .child(div().child(format!("Registered MIDI: {slot_reference_count}")))
+                            .child(div().child(format!("Registered File MIDI: {slot_reference_count}")))
                             .children(
                                 std::iter::once((slot_reference_count, slot_source))
                                     .filter(|(count, source)| {
@@ -1318,21 +1522,41 @@ impl Render for SonantMainWindow {
                     .children(std::iter::once(selected_live_channel).filter_map(|channel| {
                         if selected_reference_source == ReferenceSource::Live {
                             Some(
-                                div()
-                                    .text_color(rgb(0x93c5fd))
-                                    .child(format!(
+                                div().flex().flex_col().gap_1().child(
+                                    div().text_color(rgb(0x93c5fd)).child(format!(
                                         "Live Channel: {}",
                                         channel
                                             .map(|value| value.to_string())
                                             .unwrap_or_else(|| "Not set".to_string())
                                     )),
+                                )
+                                .child(
+                                    div().text_color(rgb(0x93c5fd)).child(format!(
+                                        "Recorded Bars: {} / Notes: {} / Events: {}",
+                                        selected_live_recording_summary.bar_count,
+                                        selected_live_recording_summary.note_count,
+                                        selected_live_recording_summary.event_count
+                                    )),
+                                )
+                                .child(
+                                    div().text_color(rgb(0x94a3b8)).child(format!(
+                                        "Pitch Range: {}",
+                                        match (
+                                            selected_live_recording_summary.min_pitch,
+                                            selected_live_recording_summary.max_pitch,
+                                        ) {
+                                            (Some(min), Some(max)) => format!("{min}..{max}"),
+                                            _ => "N/A".to_string(),
+                                        }
+                                    )),
+                                ),
                             )
                         } else {
                             None
                         }
                     }))
                     .child(div().child(format!(
-                        "Registered MIDI in slot: {selected_slot_reference_count}"
+                        "Registered File MIDI in slot: {selected_slot_reference_count}"
                     )))
                     .children(
                         std::iter::once((selected_slot_reference_count, selected_reference_source))
@@ -1471,9 +1695,9 @@ impl Render for SonantMainWindow {
 mod tests {
     use super::{
         first_available_live_channel_for_slot, live_channel_used_by_other_slots,
-        preferred_live_channel_for_slot,
+        midi_channel_from_status, preferred_live_channel_for_slot, summarize_live_recording,
     };
-    use sonant::app::{ChannelMapping, InputTrackModel};
+    use sonant::app::{ChannelMapping, InputTrackModel, LiveInputEvent};
     use sonant::domain::{ReferenceSlot, ReferenceSource};
 
     #[test]
@@ -1535,5 +1759,42 @@ mod tests {
             first_available_live_channel_for_slot(&model, ReferenceSlot::Bassline),
             Some(1)
         );
+    }
+
+    #[test]
+    fn summarize_live_recording_counts_note_events_and_pitch_range() {
+        let events = vec![
+            LiveInputEvent {
+                time: 0,
+                port_index: 0,
+                data: [0x90, 60, 96],
+            },
+            LiveInputEvent {
+                time: 1,
+                port_index: 0,
+                data: [0x90, 72, 100],
+            },
+            LiveInputEvent {
+                time: 2,
+                port_index: 0,
+                data: [0x80, 60, 0],
+            },
+        ];
+
+        let summary = summarize_live_recording(&events, 2);
+        assert_eq!(summary.bar_count, 2);
+        assert_eq!(summary.event_count, 3);
+        assert_eq!(summary.note_count, 2);
+        assert_eq!(summary.min_pitch, Some(60));
+        assert_eq!(summary.max_pitch, Some(72));
+    }
+
+    #[test]
+    fn midi_channel_from_status_maps_channel_voice_messages() {
+        assert_eq!(midi_channel_from_status(0x90), Some(1));
+        assert_eq!(midi_channel_from_status(0x9F), Some(16));
+        assert_eq!(midi_channel_from_status(0x80), Some(1));
+        assert_eq!(midi_channel_from_status(0xF8), None);
+        assert_eq!(midi_channel_from_status(0x20), None);
     }
 }
