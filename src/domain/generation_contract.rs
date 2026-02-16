@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{LlmError, has_supported_midi_extension};
 
+const DENSITY_NOTES_PER_BAR_AT_MAX_HINT: f32 = 32.0;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRef {
     pub provider: String,
@@ -224,6 +226,14 @@ impl MidiReferenceSummary {
         }
         Ok(())
     }
+}
+
+pub fn calculate_reference_density_hint(note_count: u32, bars: u16) -> f32 {
+    if bars == 0 {
+        return 1.0;
+    }
+    let notes_per_bar = note_count as f32 / f32::from(bars);
+    (notes_per_bar / DENSITY_NOTES_PER_BAR_AT_MAX_HINT).clamp(0.0, 1.0)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -553,6 +563,14 @@ mod tests {
             request.validate(),
             Err(LlmError::Validation { message }) if message == "prompt must not be empty"
         ));
+    }
+
+    #[test]
+    fn calculate_reference_density_hint_uses_shared_normalization_rule() {
+        assert_eq!(calculate_reference_density_hint(16, 4), 0.125);
+        assert_eq!(calculate_reference_density_hint(0, 4), 0.0);
+        assert_eq!(calculate_reference_density_hint(64, 1), 1.0);
+        assert_eq!(calculate_reference_density_hint(4, 0), 1.0);
     }
 
     #[test]

@@ -20,7 +20,8 @@ use sonant::{
         MIDI_CHANNEL_MIN, MidiInputRouter,
     },
     domain::{
-        GenerationMode, LlmError, ReferenceSlot, ReferenceSource, has_supported_midi_extension,
+        GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary, ReferenceSlot,
+        ReferenceSource, calculate_reference_density_hint, has_supported_midi_extension,
     },
 };
 
@@ -168,7 +169,7 @@ impl SonantMainWindow {
             return;
         }
 
-        let references = self.load_midi_use_case.snapshot_references();
+        let references = self.collect_generation_references();
         if !mode_reference_requirement_satisfied(self.selected_generation_mode, &references) {
             let message = mode_reference_requirement(self.selected_generation_mode)
                 .unmet_message
@@ -364,11 +365,17 @@ impl SonantMainWindow {
     }
 
     fn recording_enabled_for_channel(&self, channel: u8) -> bool {
-        if !(MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX).contains(&channel) {
-            return false;
-        }
-        let index = usize::from(channel - MIDI_CHANNEL_MIN);
-        self.recording_channel_enabled[index]
+        recording_enabled_for_channel_array(&self.recording_channel_enabled, channel)
+    }
+
+    fn collect_generation_references(&self) -> Vec<MidiReferenceSummary> {
+        let mut references = self.load_midi_use_case.snapshot_references();
+        references.extend(collect_live_references(
+            &self.input_track_model,
+            &self.recording_channel_enabled,
+            &self.midi_input_router,
+        ));
+        references
     }
 
     fn live_channel_used_by_other_slots(&self, slot: ReferenceSlot, channel: u8) -> bool {
@@ -847,6 +854,109 @@ fn midi_channel_from_status(status: u8) -> Option<u8> {
     }
 }
 
+fn channel_mapping_for_slot_in_mappings(
+    channel_mappings: &[ChannelMapping],
+    slot: ReferenceSlot,
+) -> Option<u8> {
+    channel_mappings
+        .iter()
+        .find(|mapping| mapping.slot == slot)
+        .map(|mapping| mapping.channel)
+}
+
+fn recording_enabled_for_channel_array(
+    recording_channel_enabled: &[bool; 16],
+    channel: u8,
+) -> bool {
+    if !(MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX).contains(&channel) {
+        return false;
+    }
+    let index = usize::from(channel - MIDI_CHANNEL_MIN);
+    recording_channel_enabled[index]
+}
+
+fn collect_live_references(
+    input_track_model: &InputTrackModel,
+    recording_channel_enabled: &[bool; 16],
+    midi_input_router: &MidiInputRouter,
+) -> Vec<MidiReferenceSummary> {
+    let channel_mappings = input_track_model.channel_mappings();
+    SonantMainWindow::reference_slots()
+        .iter()
+        .copied()
+        .filter_map(|slot| {
+            if input_track_model.source_for_slot(slot) != ReferenceSource::Live {
+                return None;
+            }
+            let channel = channel_mapping_for_slot_in_mappings(channel_mappings, slot)?;
+            if !recording_enabled_for_channel_array(recording_channel_enabled, channel) {
+                return None;
+            }
+
+            let events = midi_input_router.snapshot_reference(slot);
+            let metrics = midi_input_router.reference_metrics(slot);
+            build_live_reference_summary(slot, &events, metrics.bar_count)
+        })
+        .collect()
+}
+
+fn build_live_reference_summary(
+    slot: ReferenceSlot,
+    events: &[LiveInputEvent],
+    bar_count: usize,
+) -> Option<MidiReferenceSummary> {
+    let summary = summarize_live_recording(events, bar_count);
+    let (Some(min_pitch), Some(max_pitch)) = (summary.min_pitch, summary.max_pitch) else {
+        return None;
+    };
+    if summary.note_count == 0 {
+        return None;
+    }
+
+    let bars = u16::try_from(summary.bar_count.max(1)).unwrap_or(u16::MAX);
+    let note_count = u32::try_from(summary.note_count).unwrap_or(u32::MAX);
+    let reference = MidiReferenceSummary {
+        slot,
+        source: ReferenceSource::Live,
+        file: None,
+        bars,
+        note_count,
+        density_hint: calculate_reference_density_hint(note_count, bars),
+        min_pitch,
+        max_pitch,
+        events: build_live_reference_events(events),
+    };
+
+    reference.validate().ok().map(|_| reference)
+}
+fn build_live_reference_events(events: &[LiveInputEvent]) -> Vec<MidiReferenceEvent> {
+    let mut absolute_tick = 0_u32;
+    events
+        .iter()
+        .copied()
+        .map(|event| {
+            let delta_tick = event.time;
+            absolute_tick = absolute_tick.saturating_add(delta_tick);
+            MidiReferenceEvent {
+                track: event.port_index,
+                absolute_tick,
+                delta_tick,
+                event: format_live_reference_event_payload(event),
+            }
+        })
+        .collect()
+}
+
+fn format_live_reference_event_payload(event: LiveInputEvent) -> String {
+    let channel = midi_channel_from_status(event.data[0])
+        .map(|channel| channel.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    format!(
+        "LiveMidi channel={channel} status=0x{:02X} data1={} data2={} port={} time={}",
+        event.data[0], event.data[1], event.data[2], event.port_index, event.time
+    )
+}
+
 fn live_channel_used_by_other_slots(
     model: &InputTrackModel,
     slot: ReferenceSlot,
@@ -930,12 +1040,15 @@ impl Render for SonantMainWindow {
         let selected_slot_accepts_file_drop = selected_reference_source == ReferenceSource::File;
         let selected_live_recording_summary =
             self.live_recording_summary_for_slot(self.selected_reference_slot);
-        let references = self.load_midi_use_case.snapshot_references();
+        let file_references = self.load_midi_use_case.snapshot_references();
+        let generation_references = self.collect_generation_references();
         let live_channel_mappings = self.input_track_model.live_channel_mappings();
         let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
-        let mode_requirement_satisfied =
-            mode_reference_requirement_satisfied(self.selected_generation_mode, &references);
-        let selected_slot_references: Vec<&_> = references
+        let mode_requirement_satisfied = mode_reference_requirement_satisfied(
+            self.selected_generation_mode,
+            &generation_references,
+        );
+        let selected_slot_references: Vec<&_> = file_references
             .iter()
             .filter(|reference| reference.slot == self.selected_reference_slot)
             .collect();
@@ -1343,7 +1456,7 @@ impl Render for SonantMainWindow {
                     .flex_col()
                     .gap_2()
                     .children(Self::reference_slots().iter().copied().map(|slot| {
-                        let slot_references: Vec<&_> = references
+                        let slot_references: Vec<&_> = file_references
                             .iter()
                             .filter(|reference| reference.slot == slot)
                             .collect();
@@ -1662,13 +1775,17 @@ impl Render for SonantMainWindow {
 #[cfg(test)]
 mod tests {
     use super::{
+        build_live_reference_summary, collect_live_references,
         first_available_live_channel_for_slot, first_available_live_channel_for_slot_in_model,
         live_channel_used_by_other_slots, midi_channel_from_status,
-        preferred_live_channel_for_slot, resolve_live_channel_mapping_for_slot,
-        summarize_live_recording,
+        preferred_live_channel_for_slot, recording_enabled_for_channel_array,
+        resolve_live_channel_mapping_for_slot, summarize_live_recording,
     };
-    use sonant::app::{ChannelMapping, InputTrackModel, LiveInputEvent};
-    use sonant::domain::{ReferenceSlot, ReferenceSource};
+    use sonant::app::{ChannelMapping, InputTrackModel, LiveInputEvent, MidiInputRouter};
+    use sonant::domain::{
+        GenerationMode, GenerationParams, GenerationRequest, ModelRef, ReferenceSlot,
+        ReferenceSource,
+    };
 
     #[test]
     fn used_channel_is_excluded_only_for_other_live_slots() {
@@ -1792,6 +1909,151 @@ mod tests {
         assert_eq!(summary.note_count, 2);
         assert_eq!(summary.min_pitch, Some(60));
         assert_eq!(summary.max_pitch, Some(72));
+    }
+
+    #[test]
+    fn build_live_reference_summary_creates_valid_live_reference() {
+        let events = vec![
+            LiveInputEvent {
+                time: 0,
+                port_index: 0,
+                data: [0x90, 60, 96],
+            },
+            LiveInputEvent {
+                time: 6,
+                port_index: 0,
+                data: [0x90, 67, 100],
+            },
+            LiveInputEvent {
+                time: 2,
+                port_index: 0,
+                data: [0x80, 60, 0],
+            },
+        ];
+
+        let reference = build_live_reference_summary(ReferenceSlot::Melody, &events, 2)
+            .expect("live reference should be built");
+        assert_eq!(reference.slot, ReferenceSlot::Melody);
+        assert_eq!(reference.source, ReferenceSource::Live);
+        assert_eq!(reference.file, None);
+        assert_eq!(reference.bars, 2);
+        assert_eq!(reference.note_count, 2);
+        assert_eq!(reference.min_pitch, 60);
+        assert_eq!(reference.max_pitch, 67);
+        assert_eq!(reference.events.len(), 3);
+        assert!(
+            reference
+                .events
+                .iter()
+                .all(|event| !event.event.trim().is_empty() && event.event.contains("LiveMidi"))
+        );
+        assert!(reference.validate().is_ok());
+    }
+
+    #[test]
+    fn build_live_reference_summary_returns_none_without_note_on_events() {
+        let events = vec![LiveInputEvent {
+            time: 0,
+            port_index: 0,
+            data: [0x80, 60, 0],
+        }];
+        assert!(build_live_reference_summary(ReferenceSlot::Melody, &events, 1).is_none());
+    }
+
+    #[test]
+    fn collect_live_references_excludes_recording_disabled_channels() {
+        let mut model = InputTrackModel::new();
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("melody should switch to live");
+        model
+            .set_source_for_slot(ReferenceSlot::ChordProgression, ReferenceSource::Live)
+            .expect("chord should switch to live");
+
+        let router = MidiInputRouter::new();
+        router
+            .update_channel_mapping(model.live_channel_mappings())
+            .expect("live channel mapping should be valid");
+        router
+            .set_recording_channel_enabled(1, true)
+            .expect("channel 1 should be valid");
+        router
+            .set_recording_channel_enabled(2, true)
+            .expect("channel 2 should be valid");
+        router.update_transport_state(true, 0.0);
+        router.push_live_event(
+            1,
+            LiveInputEvent {
+                time: 0,
+                port_index: 0,
+                data: [0x90, 60, 96],
+            },
+        );
+        router.push_live_event(
+            2,
+            LiveInputEvent {
+                time: 0,
+                port_index: 0,
+                data: [0x91, 64, 96],
+            },
+        );
+
+        let mut recording_channel_enabled = [false; 16];
+        recording_channel_enabled[0] = true;
+        recording_channel_enabled[1] = false;
+
+        let references = collect_live_references(&model, &recording_channel_enabled, &router);
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].slot, ReferenceSlot::Melody);
+        assert_eq!(references[0].source, ReferenceSource::Live);
+    }
+
+    #[test]
+    fn live_reference_allows_generation_request_validation() {
+        let reference = build_live_reference_summary(
+            ReferenceSlot::Melody,
+            &[LiveInputEvent {
+                time: 0,
+                port_index: 0,
+                data: [0x90, 60, 100],
+            }],
+            1,
+        )
+        .expect("live reference should be built");
+
+        let request = GenerationRequest {
+            request_id: "req-live-1".to_string(),
+            model: ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-3-5-sonnet".to_string(),
+            },
+            mode: GenerationMode::Continuation,
+            prompt: "continue this phrase".to_string(),
+            params: GenerationParams {
+                bpm: 120,
+                key: "C".to_string(),
+                scale: "major".to_string(),
+                density: 3,
+                complexity: 3,
+                temperature: Some(0.7),
+                top_p: Some(0.9),
+                max_tokens: Some(256),
+            },
+            references: vec![reference],
+            variation_count: 1,
+        };
+
+        assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn recording_enabled_for_channel_array_checks_bounds() {
+        let mut channels = [false; 16];
+        channels[0] = true;
+        assert!(recording_enabled_for_channel_array(&channels, 1));
+        assert!(!recording_enabled_for_channel_array(&channels, 16));
+        assert!(!recording_enabled_for_channel_array(&channels, 0));
+        assert!(!recording_enabled_for_channel_array(&channels, 17));
     }
 
     #[test]
