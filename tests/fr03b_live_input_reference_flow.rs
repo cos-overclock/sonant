@@ -274,9 +274,6 @@ fn build_live_reference_summary(
     let (Some(min_pitch), Some(max_pitch)) = (min_pitch, max_pitch) else {
         return None;
     };
-    if note_count == 0 {
-        return None;
-    }
 
     let bars = u16::try_from(bar_count.max(1)).unwrap_or(u16::MAX);
     let reference = MidiReferenceSummary {
