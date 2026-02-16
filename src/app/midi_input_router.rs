@@ -112,16 +112,7 @@ impl MidiInputRouter {
             .state
             .lock()
             .expect("midi input router state lock poisoned while updating transport");
-
-        let should_reset_active_writes =
-            !is_playing || !state.is_playing || transport_rewound(state.playhead_ppq, playhead_ppq);
-
-        if should_reset_active_writes {
-            state.active_write_bar_by_slot.clear();
-        }
-
-        state.is_playing = is_playing;
-        state.playhead_ppq = playhead_ppq;
+        update_transport_state_locked(&mut state, is_playing, playhead_ppq);
     }
 
     pub fn push_live_event(&self, channel: u8, event: LiveInputEvent) {
@@ -133,43 +124,42 @@ impl MidiInputRouter {
             .state
             .lock()
             .expect("midi input router state lock poisoned while pushing live event");
+        push_live_event_locked(
+            &mut state,
+            channel,
+            event,
+            self.max_bars_per_slot,
+            self.max_events_per_bar,
+        );
+    }
 
-        if !state.is_playing {
+    pub fn push_live_events_with_transport(&self, events: &[(u8, LiveInputEvent)]) {
+        if events.is_empty() {
             return;
         }
-        if !state.recording_channel_enabled[channel_index(channel)] {
-            return;
+
+        let mut state = self
+            .state
+            .lock()
+            .expect("midi input router state lock poisoned while pushing live events batch");
+
+        for (channel, event) in events {
+            if !is_valid_channel(*channel) {
+                continue;
+            }
+            update_transport_state_locked(
+                &mut state,
+                event.is_transport_playing,
+                event.playhead_ppq,
+            );
+            push_live_event_locked(
+                &mut state,
+                *channel,
+                *event,
+                self.max_bars_per_slot,
+                self.max_events_per_bar,
+            );
         }
-
-        let Some(slot) = state.channel_to_slot.get(&channel).copied() else {
-            return;
-        };
-        let Some(bar_index) = bar_index_from_playhead(state.playhead_ppq) else {
-            return;
-        };
-
-        let is_new_active_bar =
-            state.active_write_bar_by_slot.get(&slot).copied() != Some(bar_index);
-
-        if is_new_active_bar {
-            let slot_buffer = state.slot_buffers.entry(slot).or_default();
-            slot_buffer
-                .bars
-                .insert(bar_index, VecDeque::with_capacity(self.max_events_per_bar));
-            trim_old_bars(slot_buffer, self.max_bars_per_slot);
-            state.active_write_bar_by_slot.insert(slot, bar_index);
-        }
-
-        let slot_buffer = state.slot_buffers.entry(slot).or_default();
-        let bar_events = slot_buffer
-            .bars
-            .entry(bar_index)
-            .or_insert_with(|| VecDeque::with_capacity(self.max_events_per_bar));
-
-        if bar_events.len() >= self.max_events_per_bar {
-            let _ = bar_events.pop_front();
-        }
-        bar_events.push_back(event);
     }
 
     pub fn snapshot_reference(&self, slot: ReferenceSlot) -> Vec<LiveInputEvent> {
@@ -323,6 +313,66 @@ fn normalize_playhead_ppq(playhead_ppq: f64) -> Option<f64> {
     }
 }
 
+fn update_transport_state_locked(
+    state: &mut MidiInputRouterState,
+    is_playing: bool,
+    playhead_ppq: f64,
+) {
+    let should_reset_active_writes =
+        !is_playing || !state.is_playing || transport_rewound(state.playhead_ppq, playhead_ppq);
+
+    if should_reset_active_writes {
+        state.active_write_bar_by_slot.clear();
+    }
+
+    state.is_playing = is_playing;
+    state.playhead_ppq = playhead_ppq;
+}
+
+fn push_live_event_locked(
+    state: &mut MidiInputRouterState,
+    channel: u8,
+    event: LiveInputEvent,
+    max_bars_per_slot: usize,
+    max_events_per_bar: usize,
+) {
+    if !state.is_playing {
+        return;
+    }
+    if !state.recording_channel_enabled[channel_index(channel)] {
+        return;
+    }
+
+    let Some(slot) = state.channel_to_slot.get(&channel).copied() else {
+        return;
+    };
+    let Some(bar_index) = bar_index_from_playhead(state.playhead_ppq) else {
+        return;
+    };
+
+    let is_new_active_bar = state.active_write_bar_by_slot.get(&slot).copied() != Some(bar_index);
+
+    if is_new_active_bar {
+        let slot_buffer = state.slot_buffers.entry(slot).or_default();
+        slot_buffer
+            .bars
+            .insert(bar_index, VecDeque::with_capacity(max_events_per_bar));
+        trim_old_bars(slot_buffer, max_bars_per_slot);
+        state.active_write_bar_by_slot.insert(slot, bar_index);
+    }
+
+    let slot_buffer = state.slot_buffers.entry(slot).or_default();
+    let bar_events = slot_buffer
+        .bars
+        .entry(bar_index)
+        .or_insert_with(|| VecDeque::with_capacity(max_events_per_bar));
+
+    if bar_events.len() >= max_events_per_bar {
+        let _ = bar_events.pop_front();
+    }
+    bar_events.push_back(event);
+}
+
 fn trim_old_bars(slot_buffer: &mut SlotBuffer, max_bars_per_slot: usize) {
     while slot_buffer.bars.len() > max_bars_per_slot {
         let Some((&oldest_bar, _)) = slot_buffer.bars.first_key_value() else {
@@ -343,6 +393,8 @@ mod tests {
             time: 0,
             port_index: 0,
             data: [0x90 | ((channel - 1) & 0x0F), note, 100],
+            is_transport_playing: true,
+            playhead_ppq: 0.0,
         }
     }
 
@@ -446,6 +498,71 @@ mod tests {
         assert_eq!(
             router.snapshot_reference(ReferenceSlot::Melody),
             vec![replacement_first_bar_note, second_bar_note]
+        );
+    }
+
+    #[test]
+    fn batched_push_applies_transport_state_per_event() {
+        let router = MidiInputRouter::new();
+        router
+            .update_channel_mapping(vec![ChannelMapping {
+                slot: ReferenceSlot::Melody,
+                channel: 1,
+            }])
+            .expect("mapping should be valid");
+        router
+            .set_recording_channel_enabled(1, true)
+            .expect("channel 1 should be valid");
+
+        let first_bar_note = note_on(1, 60);
+        let second_bar_note = crate::app::LiveInputEvent {
+            playhead_ppq: 4.0,
+            ..note_on(1, 67)
+        };
+        let replacement_first_bar_note = note_on(1, 72);
+
+        router.push_live_events_with_transport(&[
+            (1, first_bar_note),
+            (1, second_bar_note),
+            (1, replacement_first_bar_note),
+        ]);
+
+        assert_eq!(
+            router.snapshot_reference(ReferenceSlot::Melody),
+            vec![replacement_first_bar_note, second_bar_note]
+        );
+    }
+
+    #[test]
+    fn batched_push_updates_transport_to_last_event() {
+        let router = MidiInputRouter::new();
+        router
+            .update_channel_mapping(vec![ChannelMapping {
+                slot: ReferenceSlot::Melody,
+                channel: 1,
+            }])
+            .expect("mapping should be valid");
+        router
+            .set_recording_channel_enabled(1, true)
+            .expect("channel 1 should be valid");
+
+        let first_bar_note = note_on(1, 60);
+        let third_bar_note = crate::app::LiveInputEvent {
+            playhead_ppq: 8.0,
+            ..note_on(1, 67)
+        };
+        router.push_live_events_with_transport(&[(1, first_bar_note), (1, third_bar_note)]);
+
+        let appended_to_current_transport_bar = note_on(1, 72);
+        router.push_live_event(1, appended_to_current_transport_bar);
+
+        assert_eq!(
+            router.snapshot_reference(ReferenceSlot::Melody),
+            vec![
+                first_bar_note,
+                third_bar_note,
+                appended_to_current_transport_bar
+            ]
         );
     }
 

@@ -59,6 +59,7 @@ pub(super) struct SonantMainWindow {
     submission_model: PromptSubmissionModel,
     input_track_model: InputTrackModel,
     recording_channel_enabled: [bool; 16],
+    live_capture_transport_playing: bool,
     live_capture_playhead_ppq: f64,
     selected_generation_mode: GenerationMode,
     selected_reference_slot: ReferenceSlot,
@@ -111,6 +112,7 @@ impl SonantMainWindow {
             submission_model: PromptSubmissionModel::new(backend.default_model),
             input_track_model,
             recording_channel_enabled,
+            live_capture_transport_playing: false,
             live_capture_playhead_ppq: 0.0,
             selected_generation_mode: GenerationMode::Melody,
             selected_reference_slot: ReferenceSlot::Melody,
@@ -504,8 +506,10 @@ impl SonantMainWindow {
                 .map_err(|error| error.to_string())?;
         }
 
-        self.midi_input_router
-            .update_transport_state(true, self.live_capture_playhead_ppq);
+        self.midi_input_router.update_transport_state(
+            self.live_capture_transport_playing,
+            self.live_capture_playhead_ppq,
+        );
         Ok(())
     }
 
@@ -556,14 +560,32 @@ impl SonantMainWindow {
     }
 
     fn route_live_events_to_router(&mut self, events: Vec<LiveInputEvent>) {
-        self.midi_input_router
-            .update_transport_state(true, self.live_capture_playhead_ppq);
+        let mut routable_events = Vec::with_capacity(events.len());
+        let mut last_transport_state = None;
 
         for event in events {
+            last_transport_state = Some((event.is_transport_playing, event.playhead_ppq));
+
             let Some(channel) = midi_channel_from_status(event.data[0]) else {
                 continue;
             };
-            self.midi_input_router.push_live_event(channel, event);
+            routable_events.push((channel, event));
+        }
+
+        let last_routable_transport_state = routable_events
+            .last()
+            .map(|(_channel, event)| (event.is_transport_playing, event.playhead_ppq));
+
+        self.midi_input_router
+            .push_live_events_with_transport(&routable_events);
+
+        if let Some((is_transport_playing, playhead_ppq)) = last_transport_state {
+            self.live_capture_transport_playing = is_transport_playing;
+            self.live_capture_playhead_ppq = playhead_ppq;
+            if Some((is_transport_playing, playhead_ppq)) != last_routable_transport_state {
+                self.midi_input_router
+                    .update_transport_state(is_transport_playing, playhead_ppq);
+            }
         }
     }
 
@@ -1890,16 +1912,22 @@ mod tests {
                 time: 0,
                 port_index: 0,
                 data: [0x90, 60, 96],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
             LiveInputEvent {
                 time: 1,
                 port_index: 0,
                 data: [0x90, 72, 100],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
             LiveInputEvent {
                 time: 2,
                 port_index: 0,
                 data: [0x80, 60, 0],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
         ];
 
@@ -1918,16 +1946,22 @@ mod tests {
                 time: 0,
                 port_index: 0,
                 data: [0x90, 60, 96],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
             LiveInputEvent {
                 time: 6,
                 port_index: 0,
                 data: [0x90, 67, 100],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
             LiveInputEvent {
                 time: 2,
                 port_index: 0,
                 data: [0x80, 60, 0],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
         ];
 
@@ -1956,6 +1990,8 @@ mod tests {
             time: 0,
             port_index: 0,
             data: [0x80, 60, 0],
+            is_transport_playing: true,
+            playhead_ppq: 0.0,
         }];
         assert!(build_live_reference_summary(ReferenceSlot::Melody, &events, 1).is_none());
     }
@@ -1987,6 +2023,8 @@ mod tests {
                 time: 0,
                 port_index: 0,
                 data: [0x90, 60, 96],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
         );
         router.push_live_event(
@@ -1995,6 +2033,8 @@ mod tests {
                 time: 0,
                 port_index: 0,
                 data: [0x91, 64, 96],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             },
         );
 
@@ -2016,6 +2056,8 @@ mod tests {
                 time: 0,
                 port_index: 0,
                 data: [0x90, 60, 100],
+                is_transport_playing: true,
+                playhead_ppq: 0.0,
             }],
             1,
         )

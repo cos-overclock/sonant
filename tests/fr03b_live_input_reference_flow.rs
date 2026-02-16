@@ -213,6 +213,8 @@ fn note_on(channel: u8, note: u8, time: u32) -> LiveInputEvent {
         time,
         port_index: 0,
         data: [0x90 | ((channel - 1) & 0x0F), note, 100],
+        is_transport_playing: true,
+        playhead_ppq: 0.0,
     }
 }
 

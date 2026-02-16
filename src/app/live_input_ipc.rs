@@ -8,7 +8,7 @@ mod platform {
 
     use crate::app::{LiveInputEvent, LiveInputEventSource};
 
-    const LIVE_INPUT_IPC_PACKET_SIZE: usize = 9;
+    const LIVE_INPUT_IPC_PACKET_SIZE: usize = 18;
 
     pub struct LiveInputIpcSender {
         socket: UnixDatagram,
@@ -80,6 +80,8 @@ mod platform {
         payload[..4].copy_from_slice(&event.time.to_le_bytes());
         payload[4..6].copy_from_slice(&event.port_index.to_le_bytes());
         payload[6..9].copy_from_slice(&event.data);
+        payload[9] = u8::from(event.is_transport_playing);
+        payload[10..18].copy_from_slice(&event.playhead_ppq.to_le_bytes());
         payload
     }
 
@@ -89,12 +91,20 @@ mod platform {
         }
         let mut time_bytes = [0u8; 4];
         let mut port_index_bytes = [0u8; 2];
+        let mut playhead_ppq_bytes = [0u8; 8];
         time_bytes.copy_from_slice(&payload[..4]);
         port_index_bytes.copy_from_slice(&payload[4..6]);
+        playhead_ppq_bytes.copy_from_slice(&payload[10..18]);
+        let playhead_ppq = f64::from_le_bytes(playhead_ppq_bytes);
+        if !playhead_ppq.is_finite() {
+            return None;
+        }
         Some(LiveInputEvent {
             time: u32::from_le_bytes(time_bytes),
             port_index: u16::from_le_bytes(port_index_bytes),
             data: [payload[6], payload[7], payload[8]],
+            is_transport_playing: payload[9] != 0,
+            playhead_ppq,
         })
     }
 
@@ -114,6 +124,8 @@ mod platform {
                 time: 42,
                 port_index: 7,
                 data: [0x91, 64, 127],
+                is_transport_playing: true,
+                playhead_ppq: 12.5,
             };
 
             sender.send_event(event);

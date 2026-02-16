@@ -6,11 +6,13 @@ use thiserror::Error;
 
 const DEFAULT_CAPTURE_QUEUE_CAPACITY: usize = 2048;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiveInputEvent {
     pub time: u32,
     pub port_index: u16,
     pub data: [u8; 3],
+    pub is_transport_playing: bool,
+    pub playhead_ppq: f64,
 }
 
 pub trait LiveInputEventSource: Send + Sync {
@@ -116,6 +118,8 @@ mod tests {
             time,
             port_index: 0,
             data: [0x90 | (channel_zero_based & 0x0F), note, 100],
+            is_transport_playing: true,
+            playhead_ppq: 0.0,
         }
     }
 
