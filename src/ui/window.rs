@@ -859,8 +859,19 @@ fn live_channel_used_by_other_slots(
     slot: ReferenceSlot,
     channel: u8,
 ) -> bool {
-    model
-        .live_channel_mappings()
+    model.channel_mappings().iter().any(|mapping| {
+        mapping.slot != slot
+            && mapping.channel == channel
+            && model.source_for_slot(mapping.slot) == ReferenceSource::Live
+    })
+}
+
+fn live_channel_used_by_other_slots_in_mappings(
+    live_channel_mappings: &[ChannelMapping],
+    slot: ReferenceSlot,
+    channel: u8,
+) -> bool {
+    live_channel_mappings
         .iter()
         .any(|mapping| mapping.slot != slot && mapping.channel == channel)
 }
@@ -898,6 +909,7 @@ impl Render for SonantMainWindow {
         let selected_live_recording_summary =
             self.live_recording_summary_for_slot(self.selected_reference_slot);
         let references = self.load_midi_use_case.snapshot_references();
+        let live_channel_mappings = self.input_track_model.live_channel_mappings();
         let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
         let mode_requirement_satisfied =
             mode_reference_requirement_satisfied(self.selected_generation_mode, &references);
@@ -1217,8 +1229,11 @@ impl Render for SonantMainWindow {
                                                 .items_center()
                                                 .gap_1()
                                                 .children((start..=end).map(|channel| {
-                                                    let disabled = self
-                                                        .live_channel_used_by_other_slots(slot, channel);
+                                                    let disabled = live_channel_used_by_other_slots_in_mappings(
+                                                        &live_channel_mappings,
+                                                        slot,
+                                                        channel,
+                                                    );
                                                     let button = Button::new(
                                                         Self::input_track_channel_button_id(
                                                             slot, channel,
