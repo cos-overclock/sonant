@@ -8,10 +8,10 @@ use crate::domain::{
     GenerationMetadata, GenerationRequest, GenerationResult, GenerationUsage, LlmError,
 };
 
-use super::LlmProvider;
 use super::env::{read_env_var, read_timeout_from_env, resolve_timeout_with_global_fallback};
 use super::response_parsing::{extract_json_payload, truncate_message};
-use super::schema_validator::{GENERATION_RESULT_JSON_SCHEMA, LlmResponseSchemaValidator};
+use super::schema_validator::LlmResponseSchemaValidator;
+use super::{LlmProvider, PromptBuilder};
 
 const PROVIDER_ID: &str = "anthropic";
 const API_VERSION: &str = "2023-06-01";
@@ -92,23 +92,17 @@ impl AnthropicProvider {
         &self,
         request: &GenerationRequest,
     ) -> Result<AnthropicMessagesRequest, LlmError> {
-        let request_json = serde_json::to_string_pretty(request).map_err(|err| {
-            LlmError::internal(format!("failed to serialize request prompt: {err}"))
-        })?;
-        let user_content = format!(
-            "Input GenerationRequest (JSON):\n{request_json}\n\nReturn only a JSON object that matches the schema below.\nDo not include markdown fences.\nSchema:\n{GENERATION_RESULT_JSON_SCHEMA}"
-        );
+        let prompt = PromptBuilder::build(request);
 
         Ok(AnthropicMessagesRequest {
             model: request.model.model.clone(),
             max_tokens: request.params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             temperature: request.params.temperature,
             top_p: request.params.top_p,
-            system: "You are Sonant's generation backend. Output must be strict JSON only."
-                .to_string(),
+            system: prompt.system,
             messages: vec![AnthropicMessage {
                 role: "user".to_string(),
-                content: user_content,
+                content: prompt.user,
             }],
         })
     }
@@ -446,12 +440,12 @@ mod tests {
         assert!(
             payload.messages[0]
                 .content
-                .contains("\"request_id\": \"req-42\"")
+                .contains("request_id must equal \"req-42\"")
         );
         assert!(
             payload.messages[0]
                 .content
-                .contains("\"variation_count\": 2")
+                .contains("candidates must contain exactly 2 items")
         );
     }
 
