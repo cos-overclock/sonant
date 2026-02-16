@@ -277,6 +277,40 @@ pub trait MidiInputRouter {
 - Drum: Channel 10
 - Bass: Channel 3
 
+### 4.7 UIコンポーネント設計（基準画面準拠）
+
+基準画面:
+
+- メイン画面: `docs/image/sonant_main_plugin_interface/screen.png`
+- 設定画面: `docs/image/sonant_api_&_model_settings/screen.png`
+
+#### 4.7.1 メイン画面コンポーネント
+
+| UIエリア | 主要コンポーネント | 入力イベント | 状態更新 |
+|---|---|---|---|
+| Header | `api_status_badge`, `settings_button` | `OpenSettings` | `provider_status` |
+| Prompt/Mode/Model | `prompt_editor`, `mode_selector`, `model_selector` | `UpdatePrompt`, `UpdateMode`, `UpdateModel` | `prompt`, `mode`, `model` |
+| Input Tracks | `input_track_list`, `track_row`, `add_track_button` | `AddTrack`, `UpdateTrackSource`, `ToggleTrackMonitor`, `ToggleTrackVisibility` | `input_tracks[]` |
+| Generated Patterns | `pattern_list`, `pattern_row` | `SelectCandidate`, `ToggleCandidateVisibility`, `DragCandidateToHost` | `candidates[]`, `selected_candidate` |
+| Params | `key_selector`, `scale_selector`, `bpm_input`, `complexity_slider`, `density_slider` | `UpdateParams`, `UpdateComplexity`, `UpdateDensity` | `generation_params` |
+| Piano Roll | `piano_roll_canvas`, `playhead_overlay` | `SeekPreview`, `ScrollPianoRoll` | `preview`, `playhead` |
+| Footer | `status_label`, `generate_button` | `Generate` | `ui_state`, `generation_job` |
+
+#### 4.7.2 設定画面コンポーネント
+
+| UIエリア | 主要コンポーネント | 入力イベント | 状態更新 |
+|---|---|---|---|
+| Sidebar | `settings_nav` (`API Keys`, `MIDI Settings`, `General`) | `SelectSettingsTab` | `settings_tab` |
+| Provider Cards | `provider_card_anthropic`, `provider_card_openai`, `provider_card_custom` | `UpdateApiKey`, `UpdateBaseUrl`, `TestProviderConnection` | `provider_settings`, `provider_status` |
+| Model Preferences | `default_model_selector`, `context_window_selector` | `UpdateDefaultModel`, `UpdateContextWindow` | `model_preferences` |
+| Footer Actions | `cancel_button`, `save_close_button` | `DiscardSettings`, `SaveSettings` | `settings_dirty`, `persist_result` |
+
+#### 4.7.3 UIイベント契約
+
+- `Generate` 実行前に `mode_reference_requirement_satisfied` を必ず評価し、不足時は送信せずメッセージを表示する。
+- `SaveSettings` 成功後、ヘッダーAPIステータス（`API CONNECTED` など）と既定モデル表示をメイン画面へ同期する。
+- `UpdateTrackSource` で `Live Input` を選択した行は、`channel_mappings` の重複チェック対象に含める。
+
 ## 5. 状態管理
 
 ```rust
@@ -295,6 +329,14 @@ pub enum UiState {
 - `Idle -> Generating -> PreviewReady`
 - 失敗時は任意状態から `Error`
 - `Error` は再生成で `Generating` に復帰可能
+
+UI画面状態（4.7対応）:
+
+- `provider_status`: `Connected | InvalidKey | NotConfigured`
+- `settings_tab`: `ApiKeys | MidiSettings | General`
+- `input_tracks[]`: ソース種別（File/Live）、チャンネル、監視ON/OFF、可視状態
+- `selected_candidate`: アクティブな生成パターンID
+- `settings_dirty`: 設定画面で未保存変更があるか
 
 ## 6. ユースケース別シーケンス
 
@@ -430,7 +472,7 @@ UI表示ポリシー:
 - [ ] UIで複数 `ReferenceSlot`（Melody以外）を個別に設定可能にする
 - [ ] リアルタイム入力のモード別スロット設定とチャンネルマッピングUIを接続
 
-## 11. 決定事項（2026-02-12）
+## 11. 決定事項（2026-02-16）
 
 - UIフレームワークはGPUI一本で進める
 - LLM出力形式はJSON固定とする
@@ -438,3 +480,4 @@ UI表示ポリシー:
 - 参照MIDI解析のキー推定は外部ライブラリを採用する
 - MIDI入力はファイル選択とリアルタイム入力の両方に対応する
 - リアルタイム入力では入力種別ごとにMIDI Channelを設定可能とする
+- UI実装は `docs/image/sonant_main_plugin_interface/screen.png` と `docs/image/sonant_api_&_model_settings/screen.png` を基準とする

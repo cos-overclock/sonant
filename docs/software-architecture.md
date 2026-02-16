@@ -60,12 +60,12 @@ Local resources:
 | FR | 実現モジュール |
 |---|---|
 | FR-01/08 | `plugin::clap_adapter`, `app::midi_output_router` |
-| FR-02/06/09 | `ui::main_window`, `domain::generation_request` |
-| FR-03 | `ui::midi_slot`, `ui::channel_mapping_panel`, `infra::midi::loader`, `plugin::live_midi_capture`, `app::midi_input_router` |
+| FR-02/06/09 | `ui::window`, `ui::state`, `domain::generation_contract` |
+| FR-03 | `ui::window`, `ui::state`, `infra::midi::loader`, `plugin::live_midi_capture`, `app::midi_input_router` |
 | FR-04 | `infra::llm::claude_client`, `app::generation_coordinator` |
 | FR-05a〜g | `domain::generation_contract::GenerationMode`, `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state`, `infra::llm::prompt_builder::PromptBuilder` |
-| FR-07 | `ui::piano_roll`, `app::preview_state` |
-| FR-10 | `infra::secrets::api_key_store` |
+| FR-07 | `ui::window`, `ui::state`, `app::preview_state` |
+| FR-10 | `ui::window`, `infra::secrets::api_key_store` |
 | FR-11/12/15 | `app::history_service`, `app::variation_service`, `app::preset_service` |
 | FR-13 | `infra::midi::exporter` |
 | FR-14 | `plugin::transport_sync` |
@@ -91,6 +91,25 @@ Local resources:
 | モード別テンプレート選択と参照MIDI埋め込み | `infra::llm::prompt_builder::PromptBuilder` | `GenerationMode` と `GenerationRequest.references` からLLM入力を構築 |
 | プロバイダ呼び出し・リトライ | `app::generation_service::GenerationService`, `infra::llm::anthropic`, `infra::llm::openai_compatible` | PromptBuilder出力を使ってAPI実行 |
 | 応答スキーマ検証と結果検証 | `infra::llm::schema_validator`, `domain::generation_contract::GenerationResult::validate` | JSON契約違反を検出し、UIへエラー返却 |
+
+### 4.5 UI基準画面と責務分割（2026-02-16）
+
+基準画面:
+
+- メイン画面: `docs/image/sonant_main_plugin_interface/screen.png`
+- 設定画面: `docs/image/sonant_api_&_model_settings/screen.png`
+
+| 画面 | UI責務 | 状態・データ | 主実装モジュール |
+|---|---|---|---|
+| メイン画面（サイドバー） | Prompt/Mode/Model入力、入力トラック管理、生成候補選択、スライダー操作 | `prompt`, `mode`, `selected_model`, `input_tracks`, `selected_pattern`, `complexity`, `note_density` | `ui::window`, `ui::state`, `ui::request` |
+| メイン画面（メインキャンバス） | Key/Scale/BPM編集、ピアノロール描画、再生位置表示、生成実行 | `generation_params`, `preview_candidates`, `playhead`, `ui_status` | `ui::window`, `app::preview_state`, `app::generation_job_manager` |
+| 設定画面（Provider Configuration） | APIキー入出力、接続テスト、既定モデル設定 | `provider_settings`, `provider_status`, `default_model`, `context_window` | `ui::window`, `infra::secrets::api_key_store`, `infra::llm::provider_registry` |
+
+UI一貫性ルール:
+
+- ヘッダーのAPI状態表示（`API CONNECTED`）は設定画面のProvider状態と同一ソースを参照する。
+- 設定の `Save & Close` 後は、`ui::state` を通じてメイン画面へ同期反映する。
+- 画像基準からの逸脱を伴うUI変更は、`docs/image` と設計書（本書 + 詳細設計）を同時更新する。
 
 ## 5. ランタイム構成
 
@@ -174,7 +193,7 @@ Local resources:
 | Phase 3 | 履歴・複数候補・プリセット・エクスポート・DAW同期 |
 | Phase 4 | リアルタイム生成、ローカルモデル、VST3/AU拡張 |
 
-## 11. 決定事項（2026-02-12）
+## 11. 決定事項（2026-02-16）
 
 - GUIはGPUI一本で進める
 - LLM出力形式はJSON固定とする
@@ -182,6 +201,7 @@ Local resources:
 - 参照MIDI解析のキー推定は外部ライブラリを採用する
 - MIDI入力はファイル選択とリアルタイム入力の両方に対応する
 - リアルタイム入力では入力種別ごとにMIDI Channelを設定可能とする
+- UI実装は `docs/image/sonant_main_plugin_interface/screen.png` と `docs/image/sonant_api_&_model_settings/screen.png` を基準とする
 
 ## 12. FR-05実装進捗チェックリスト（2026-02-16時点）
 

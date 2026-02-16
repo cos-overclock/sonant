@@ -138,38 +138,44 @@ DAWのワークフローを離れることなく、自然言語と参照MIDI（�
 | ビルド | cargo, cross-compilation for Windows/macOS |
 | CI/CD | GitHub Actions |
 
-## 10. GUI構成（概念）
+## 10. GUI構成（基準UI）
 
-```
-┌─────────────────────────────────────────────────┐
-│  Sonant                                    [≡]  │
-├────────────┬────────────────────────────────────┤
-│ MODE       │  MIDI Inputs (File / Live)         │
-│ ○ Melody   │  Melody: [File▼] [Melody.mid] [×]  │
-│ ○ Chord    │  Chord : [Live▼] Ch:[2▼]           │
-│ ○ Drum     │  Drum  : [Live▼] Ch:[10▼]          │
-│ ○ Bass     │  [+ Add Input]                     │
-│ ○ Counter  ├────────────────────────────────────┤
-│ ○ Harmony  │  Parameters                        │
-│ ○ Continue │  Key: [C] Scale: [Major ▼]         │
-│            │  BPM: [120]  Density: [●●●○○]      │
-├────────────┴────────────────────────────────────┤
-│ Prompt:                                         │
-│ ┌─────────────────────────────────────────────┐ │
-│ │ 明るいポップなメロディを生成して            │ │
-│ └─────────────────────────────────────────────┘ │
-│                          [Generate] [Variations] │
-├─────────────────────────────────────────────────┤
-│ Preview (Piano Roll)                            │
-│ ┌─────────────────────────────────────────────┐ │
-│ │ C5 ─ ██      ██  ████                      │ │
-│ │ B4 ─     ██          ██                     │ │
-│ │ A4 ─         ██          ████               │ │
-│ │ G4 ─ ████        ██                         │ │
-│ └─────────────────────────────────────────────┘ │
-│              [◁ Prev] 1/3 [Next ▷]  [Apply]    │
-└─────────────────────────────────────────────────┘
-```
+以下の2画面をUI実装の基準とする。レイアウト、情報階層、主要な操作導線はこの画面構成に合わせる。
+
+- メイン画面: `docs/image/sonant_main_plugin_interface/screen.png`
+- 設定画面: `docs/image/sonant_api_&_model_settings/screen.png`
+
+### 10.1 メインプラグイン画面
+
+![Sonant Main Plugin Interface](image/sonant_main_plugin_interface/screen.png)
+
+| エリア | 役割 | 関連FR |
+|---|---|---|
+| Header（ロゴ、API CONNECTED、Settings） | 接続状態の可視化と設定導線 | FR-09, FR-10 |
+| Prompt / Generation Mode / AI Model | 生成指示、モード、使用モデルの入力 | FR-02, FR-04, FR-05 |
+| Input Tracks | 参照MIDI入力の管理（ファイル/ライブ、監視、表示） | FR-03, FR-03a, FR-03b, FR-03c |
+| Generated Patterns | 候補パターン選択、可視化切替、DAWへドラッグ導線 | FR-07, FR-08, FR-12 |
+| Key / Scale / BPM + Complexity / Note Density | 生成パラメーター編集 | FR-06 |
+| Piano Roll + Playhead | 生成結果プレビューと参照トラック重ね表示 | FR-07 |
+| Status Bar + Generate CTA | 状態表示と生成実行 | FR-04, FR-09 |
+
+### 10.2 API / Model Settings画面
+
+![Sonant API and Model Settings](image/sonant_api_&_model_settings/screen.png)
+
+| エリア | 役割 | 関連FR |
+|---|---|---|
+| Sidebar（API Keys / MIDI Settings / General） | 設定カテゴリ切替 | FR-09 |
+| Provider Configuration（Anthropic/OpenAI/Local） | APIキー・接続先設定と疎通テスト | FR-10, FR-04 |
+| Provider Status（Connected / Invalid Key / Not Configured） | 接続状態・エラーの即時フィードバック | FR-10 |
+| Model Preferences（Default Model / Context Window） | 既定モデルと推論設定 | FR-04, FR-06 |
+| Footer（Cancel / Save & Close） | 設定反映制御 | FR-09, FR-10 |
+
+### 10.3 UI実装ルール
+
+- 画面構成は `docs/image/*/screen.png` を基準とし、変更時は画像と仕様を同時更新する。
+- 設定画面はメイン画面の設定アイコンから開き、保存後にメイン画面へ反映される。
+- API接続状態は設定画面とメイン画面ヘッダーで一貫して表示する（例: `API CONNECTED`）。
 
 ## 11. 開発フェーズ（ロードマップ案）
 
@@ -212,7 +218,7 @@ DAWのワークフローを離れることなく、自然言語と参照MIDI（�
 | CLAPエコシステムの成熟度 | 対応DAWが限定的 | 将来的にVST3/AU対応を視野に入れる |
 | リアルタイム入力のチャンネル競合 | 誤った参照解析により生成品質が低下 | 入力種別ごとのチャンネルマッピングUIと重複検知バリデーションを実装 |
 
-## 13. 仕様確定事項（2026-02-12）
+## 13. 仕様確定事項（2026-02-16）
 
 - GUIフレームワークはGPUI一本で進める
 - LLMの出力形式はJSON固定とする
@@ -220,7 +226,8 @@ DAWのワークフローを離れることなく、自然言語と参照MIDI（�
 - 参照MIDI解析のキー推定は外部ライブラリを採用する
 - MIDI入力はファイル選択とリアルタイム入力の両方に対応する
 - リアルタイム入力では入力種別ごとにMIDI Channelを設定可能とする
+- UI実装は `docs/image/sonant_main_plugin_interface/screen.png` と `docs/image/sonant_api_&_model_settings/screen.png` を基準に進める
 
 ---
 
-*最終更新: 2026-02-12*
+*最終更新: 2026-02-16*
