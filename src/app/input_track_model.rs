@@ -56,8 +56,22 @@ impl InputTrackModel {
         self.slot_sources[slot_index(slot)]
     }
 
-    pub fn set_source_for_slot(&mut self, slot: ReferenceSlot, source: ReferenceSource) {
-        self.slot_sources[slot_index(slot)] = source;
+    pub fn set_source_for_slot(
+        &mut self,
+        slot: ReferenceSlot,
+        source: ReferenceSource,
+    ) -> Result<(), InputTrackModelError> {
+        let index = slot_index(slot);
+        let previous_source = self.slot_sources[index];
+        self.slot_sources[index] = source;
+
+        if let Err(err) = validate_channel_mappings(&self.slot_sources, &self.channel_mappings) {
+            // Revert the change if validation fails to avoid leaving the model in an invalid state.
+            self.slot_sources[index] = previous_source;
+            return Err(err);
+        }
+
+        Ok(())
     }
 
     pub fn channel_mappings(&self) -> &[ChannelMapping] {
