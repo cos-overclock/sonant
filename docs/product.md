@@ -155,7 +155,7 @@ DAWのワークフローを離れることなく、自然言語と参照MIDI（�
 |---|---|---|
 | Header（ロゴ、API CONNECTED、Settings） | 接続状態の可視化と設定導線 | FR-09, FR-10 |
 | Prompt / Generation Mode / AI Model | 生成指示、モード、使用モデルの入力 | FR-02, FR-04, FR-05 |
-| Input Tracks | 参照MIDI入力の管理（ファイル/ライブ、監視、表示） | FR-03, FR-03a, FR-03b, FR-03c |
+| Input Tracks | 参照MIDI入力の管理（ファイル/ライブ、監視、表示） | FR-03, FR-03a, FR-03b, FR-03c, FR-03d |
 | Generated Patterns | 候補パターン選択、可視化切替、DAWへドラッグ導線 | FR-07, FR-08, FR-12 |
 | Key / Scale / BPM + Complexity / Note Density | 生成パラメーター編集 | FR-06 |
 | Piano Roll + Playhead | 生成結果プレビューと参照トラック重ね表示 | FR-07 |
@@ -192,6 +192,7 @@ DAWのワークフローを離れることなく、自然言語と参照MIDI（�
 - 全7生成モード実装
 - MIDI入力ソース（ファイル/リアルタイム）対応
 - 入力種別ごとのMIDI Channel設定UI
+- MIDI ChannelごとのRecording有効/無効設定UI
 - パラメーター設定UI
 - MIDI出力（DAWトラックへ）
 
@@ -228,6 +229,7 @@ DAWのワークフローを離れることなく、自然言語と参照MIDI（�
 - 参照MIDI解析のキー推定は外部ライブラリを採用する
 - MIDI入力はファイル選択とリアルタイム入力の両方に対応する
 - リアルタイム入力では入力種別ごとにMIDI Channelを設定可能とする
+- リアルタイム入力ではMIDI ChannelごとにRecording有効/無効を設定可能とする
 - UI実装は `docs/image/sonant_main_plugin_interface/screen.png` と `docs/image/sonant_api_&_model_settings/screen.png` を基準に進める
 
 ---
