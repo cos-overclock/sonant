@@ -7,7 +7,7 @@ use crate::domain::{ReferenceSlot, ReferenceSource};
 pub const MIDI_CHANNEL_MIN: u8 = 1;
 pub const MIDI_CHANNEL_MAX: u8 = 16;
 
-const REFERENCE_SLOT_COUNT: usize = std::mem::variant_count::<ReferenceSlot>();
+const REFERENCE_SLOT_COUNT: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelMapping {
@@ -29,8 +29,12 @@ impl ChannelMapping {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InputTrackModelError {
-    #[error("channel for {slot:?} must be in {MIDI_CHANNEL_MIN}..={MIDI_CHANNEL_MAX} (got {channel})")]
+    #[error(
+        "channel for {slot:?} must be in {MIDI_CHANNEL_MIN}..={MIDI_CHANNEL_MAX} (got {channel})"
+    )]
     ChannelOutOfRange { slot: ReferenceSlot, channel: u8 },
+    #[error("channel mapping for {slot:?} must be unique")]
+    DuplicateSlotMapping { slot: ReferenceSlot },
     #[error(
         "live channel {channel} is already assigned to {existing_slot:?} and cannot also be assigned to {conflicting_slot:?}"
     )]
@@ -150,10 +154,17 @@ fn validate_channel_mappings(
     slot_sources: &[ReferenceSource; REFERENCE_SLOT_COUNT],
     channel_mappings: &[ChannelMapping],
 ) -> Result<(), InputTrackModelError> {
+    let mut has_mapping_for_slot = [false; REFERENCE_SLOT_COUNT];
     let mut live_channel_slots = HashMap::new();
 
     for mapping in channel_mappings {
         mapping.validate()?;
+
+        let slot_index = slot_index(mapping.slot);
+        if has_mapping_for_slot[slot_index] {
+            return Err(InputTrackModelError::DuplicateSlotMapping { slot: mapping.slot });
+        }
+        has_mapping_for_slot[slot_index] = true;
 
         if source_for_slot(slot_sources, mapping.slot) != ReferenceSource::Live {
             continue;
@@ -212,8 +223,12 @@ mod tests {
             ReferenceSource::File
         );
 
-        model.set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live);
-        model.set_source_for_slot(ReferenceSlot::DrumPattern, ReferenceSource::Live);
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("source update should succeed");
+        model
+            .set_source_for_slot(ReferenceSlot::DrumPattern, ReferenceSource::Live)
+            .expect("source update should succeed");
 
         assert_eq!(
             model.source_for_slot(ReferenceSlot::Melody),
@@ -257,7 +272,9 @@ mod tests {
     #[test]
     fn channel_range_validation_rejects_values_outside_midi_channel_range() {
         let mut model = InputTrackModel::new();
-        model.set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live);
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("source update should succeed");
 
         let error = model
             .replace_channel_mappings(vec![ChannelMapping {
@@ -278,8 +295,12 @@ mod tests {
     #[test]
     fn duplicate_live_channel_is_rejected() {
         let mut model = InputTrackModel::new();
-        model.set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live);
-        model.set_source_for_slot(ReferenceSlot::ChordProgression, ReferenceSource::Live);
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("source update should succeed");
+        model
+            .set_source_for_slot(ReferenceSlot::ChordProgression, ReferenceSource::Live)
+            .expect("source update should succeed");
 
         let error = model
             .replace_channel_mappings(vec![
@@ -307,8 +328,12 @@ mod tests {
     #[test]
     fn duplicate_channel_is_allowed_when_slots_are_not_both_live() {
         let mut model = InputTrackModel::new();
-        model.set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live);
-        model.set_source_for_slot(ReferenceSlot::ChordProgression, ReferenceSource::File);
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("source update should succeed");
+        model
+            .set_source_for_slot(ReferenceSlot::ChordProgression, ReferenceSource::File)
+            .expect("source update should succeed");
 
         model
             .replace_channel_mappings(vec![
@@ -329,6 +354,34 @@ mod tests {
                 slot: ReferenceSlot::Melody,
                 channel: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn duplicate_slot_mapping_is_rejected() {
+        let mut model = InputTrackModel::new();
+        model
+            .set_source_for_slot(ReferenceSlot::Melody, ReferenceSource::Live)
+            .expect("source update should succeed");
+
+        let error = model
+            .replace_channel_mappings(vec![
+                ChannelMapping {
+                    slot: ReferenceSlot::Melody,
+                    channel: 1,
+                },
+                ChannelMapping {
+                    slot: ReferenceSlot::Melody,
+                    channel: 2,
+                },
+            ])
+            .expect_err("duplicate slot mapping should be rejected");
+
+        assert_eq!(
+            error,
+            InputTrackModelError::DuplicateSlotMapping {
+                slot: ReferenceSlot::Melody,
+            }
         );
     }
 }
