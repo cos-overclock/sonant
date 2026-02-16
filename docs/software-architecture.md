@@ -63,12 +63,34 @@ Local resources:
 | FR-02/06/09 | `ui::main_window`, `domain::generation_request` |
 | FR-03 | `ui::midi_slot`, `ui::channel_mapping_panel`, `infra::midi::loader`, `plugin::live_midi_capture`, `app::midi_input_router` |
 | FR-04 | `infra::llm::claude_client`, `app::generation_coordinator` |
-| FR-05a〜g | `domain::generation_mode`, `app::prompt_builder` |
+| FR-05a〜g | `domain::generation_contract::GenerationMode`, `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state`, `infra::llm::prompt_builder::PromptBuilder` |
 | FR-07 | `ui::piano_roll`, `app::preview_state` |
 | FR-10 | `infra::secrets::api_key_store` |
 | FR-11/12/15 | `app::history_service`, `app::variation_service`, `app::preset_service` |
 | FR-13 | `infra::midi::exporter` |
 | FR-14 | `plugin::transport_sync` |
+
+### 4.3 FR-05a〜g モード別入力要件と実装モジュール（2026-02-16時点）
+
+| FR | Mode | 参照MIDI要件（必須/任意） | 判定モジュール | プロンプト構築モジュール |
+|---|---|---|---|---|
+| FR-05a | `Melody` | 必須: なし / 任意: すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` | `infra::llm::prompt_builder::PromptBuilder` |
+| FR-05b | `ChordProgression` | 必須: なし / 任意: すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` | `infra::llm::prompt_builder::PromptBuilder` |
+| FR-05c | `DrumPattern` | 必須: なし / 任意: すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` | `infra::llm::prompt_builder::PromptBuilder` |
+| FR-05d | `Bassline` | 必須: なし / 任意: すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` | `infra::llm::prompt_builder::PromptBuilder` |
+| FR-05e | `CounterMelody` | 必須: `ReferenceSlot::Melody` を最低1件 / 任意: その他スロット | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` | `infra::llm::prompt_builder::PromptBuilder` |
+| FR-05f | `Harmony` | 必須: `ReferenceSlot::Melody` を最低1件 / 任意: その他スロット | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` | `infra::llm::prompt_builder::PromptBuilder` |
+| FR-05g | `Continuation` | 必須: いずれかの `ReferenceSlot` を最低1件 / 任意: 追加参照 | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` | `infra::llm::prompt_builder::PromptBuilder` |
+
+### 4.4 PromptBuilder導入後の責務分担（FR-05関連）
+
+| 責務 | 実装モジュール | 補足 |
+|---|---|---|
+| モード/参照要件の正規判定 | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements` | サーバー送信前の最終判定（真の受け入れ条件） |
+| UI上の事前ガードと要件表示 | `ui::state::mode_reference_requirement`, `ui::state::mode_reference_requirement_satisfied`, `ui::window::SonantMainWindow::on_generate_clicked` | 生成実行前に不足要件を即時表示 |
+| モード別テンプレート選択と参照MIDI埋め込み | `infra::llm::prompt_builder::PromptBuilder` | `GenerationMode` と `GenerationRequest.references` からLLM入力を構築 |
+| プロバイダ呼び出し・リトライ | `app::generation_service::GenerationService`, `infra::llm::anthropic`, `infra::llm::openai_compatible` | PromptBuilder出力を使ってAPI実行 |
+| 応答スキーマ検証と結果検証 | `infra::llm::schema_validator`, `domain::generation_contract::GenerationResult::validate` | JSON契約違反を検出し、UIへエラー返却 |
 
 ## 5. ランタイム構成
 
@@ -160,3 +182,14 @@ Local resources:
 - 参照MIDI解析のキー推定は外部ライブラリを採用する
 - MIDI入力はファイル選択とリアルタイム入力の両方に対応する
 - リアルタイム入力では入力種別ごとにMIDI Channelを設定可能とする
+
+## 12. FR-05実装進捗チェックリスト（2026-02-16時点）
+
+- [x] 7モード定義を `domain::generation_contract::GenerationMode` に集約
+- [x] モード別参照要件を `GenerationRequest::validate_mode_reference_requirements` で検証
+- [x] UIで7モードを選択できる（`ui::window` のモードセレクタ）
+- [x] UIで参照要件不足を事前表示・ブロックできる（`ui::state`, `ui::window`）
+- [x] `PromptBuilder` が7モードのテンプレートと参照MIDIイベント列をLLM入力へ反映
+- [x] FR-05要件マトリクスを `domain` / `ui` / `infra::llm::prompt_builder` のユニットテストでカバー
+- [ ] 複数 `ReferenceSlot`（Melody以外）のUIスロット選択・編集
+- [ ] リアルタイム入力 + チャンネルマッピングUI（FR-03b/03c連携）
