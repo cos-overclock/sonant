@@ -191,5 +191,5 @@ Local resources:
 - [x] UIで参照要件不足を事前表示・ブロックできる（`ui::state`, `ui::window`）
 - [x] `PromptBuilder` が7モードのテンプレートと参照MIDIイベント列をLLM入力へ反映
 - [x] FR-05要件マトリクスを `domain` / `ui` / `infra::llm::prompt_builder` のユニットテストでカバー
-- [ ] 複数 `ReferenceSlot`（Melody以外）のUIスロット選択・編集
+- [ ] 複数 `ReferenceSlot`のUIスロット選択・編集
 - [ ] リアルタイム入力 + チャンネルマッピングUI（FR-03b/03c連携）
