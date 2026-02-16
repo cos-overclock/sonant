@@ -138,6 +138,25 @@ impl FileReferenceInput {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiReferenceEvent {
+    pub track: u16,
+    pub absolute_tick: u32,
+    pub delta_tick: u32,
+    pub event: String,
+}
+
+impl MidiReferenceEvent {
+    pub fn validate(&self) -> Result<(), LlmError> {
+        if self.event.trim().is_empty() {
+            return Err(LlmError::validation(
+                "reference event must include a non-empty event payload",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MidiReferenceSummary {
     pub slot: ReferenceSlot,
@@ -149,6 +168,8 @@ pub struct MidiReferenceSummary {
     pub density_hint: f32,
     pub min_pitch: u8,
     pub max_pitch: u8,
+    #[serde(default)]
+    pub events: Vec<MidiReferenceEvent>,
 }
 
 impl MidiReferenceSummary {
@@ -193,6 +214,14 @@ impl MidiReferenceSummary {
             return Err(LlmError::validation(
                 "reference min_pitch must be less than or equal to max_pitch",
             ));
+        }
+        if matches!(self.source, ReferenceSource::File) && self.events.is_empty() {
+            return Err(LlmError::validation(
+                "reference events must not be empty for file source",
+            ));
+        }
+        for event in &self.events {
+            event.validate()?;
         }
         Ok(())
     }
@@ -414,6 +443,15 @@ fn default_channel() -> u8 {
 mod tests {
     use super::*;
 
+    fn sample_event() -> MidiReferenceEvent {
+        MidiReferenceEvent {
+            track: 0,
+            absolute_tick: 0,
+            delta_tick: 0,
+            event: "NoteOn channel=0 key=60 vel=100".to_string(),
+        }
+    }
+
     #[test]
     fn request_validation_rejects_empty_prompt() {
         let request = GenerationRequest {
@@ -486,6 +524,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(matches!(
@@ -508,6 +547,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(matches!(
@@ -530,6 +570,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(matches!(
@@ -552,6 +593,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(matches!(
@@ -573,6 +615,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(matches!(
@@ -594,6 +637,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(reference.validate().is_ok());
@@ -612,6 +656,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(reference.validate().is_ok());
@@ -630,6 +675,7 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(reference.validate().is_ok());
@@ -648,9 +694,61 @@ mod tests {
             density_hint: 0.5,
             min_pitch: 60,
             max_pitch: 72,
+            events: vec![sample_event()],
         };
 
         assert!(reference.validate().is_ok());
+    }
+
+    #[test]
+    fn reference_validation_rejects_empty_event_payload() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.mid".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+            events: vec![MidiReferenceEvent {
+                track: 0,
+                absolute_tick: 0,
+                delta_tick: 0,
+                event: "   ".to_string(),
+            }],
+        };
+
+        assert!(matches!(
+            reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "reference event must include a non-empty event payload"
+        ));
+    }
+
+    #[test]
+    fn reference_validation_rejects_missing_events_for_file_source() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.mid".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+            events: Vec::new(),
+        };
+
+        assert!(matches!(
+            reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "reference events must not be empty for file source"
+        ));
     }
 
     #[test]

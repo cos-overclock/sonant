@@ -77,38 +77,36 @@ pub struct GenerationParams {
     pub complexity: u8, // 1..=5
 }
 
-pub struct MidiReference {
+pub struct FileReferenceInput {
+    pub path: String,
+}
+
+pub struct MidiReferenceEvent {
+    pub track: u16,
+    pub absolute_tick: u32,
+    pub delta_tick: u32,
+    pub event: String, // midlyイベントの文字列表現
+}
+
+pub struct MidiReferenceSummary {
     pub slot: ReferenceSlot,
-    pub source: ReferenceInputSource,
-    pub events: Vec<MidiEvent>,
-}
-
-pub enum ReferenceInputSource {
-    File(std::path::PathBuf),
-    Live(LiveInputKind),
-}
-
-pub enum LiveInputKind {
-    Melody,
-    Chord,
-    Drum,
-    Bass,
-    CounterMelody,
-    Harmony,
-    ContinuationSeed,
-}
-
-pub struct ChannelMapping {
-    pub kind: LiveInputKind,
-    pub channel: u8, // 1..=16
+    pub source: ReferenceSource,
+    pub file: Option<FileReferenceInput>, // source=File時に必須
+    pub bars: u16,
+    pub note_count: u32,
+    pub density_hint: f32,
+    pub min_pitch: u8,
+    pub max_pitch: u8,
+    pub events: Vec<MidiReferenceEvent>, // source=File時は空禁止
 }
 
 pub struct GenerationRequest {
+    pub request_id: String,
+    pub model: ModelRef,
     pub mode: GenerationMode,
     pub prompt: String,
     pub params: GenerationParams,
-    pub references: Vec<MidiReference>,
-    pub channel_mappings: Vec<ChannelMapping>,
+    pub references: Vec<MidiReferenceSummary>,
     pub variation_count: u8, // Phase 3で利用
 }
 
@@ -126,6 +124,7 @@ pub struct GenerationCandidate {
 - `bpm` は `20..=300`
 - `density/complexity` は `1..=5`
 - `Continuation` モード時は最低1つの参照MIDI必須（FR-05g）
+- `source=File` の参照MIDIは `events` が空であってはならない
 - リアルタイム入力で使用する `channel` は `1..=16`
 - `channel_mappings` は入力種別ごとに一意（重複チャンネル割当は不可）
 
@@ -162,6 +161,7 @@ pub trait GenerationCoordinator {
 - モード別テンプレート選択
 - 音楽理論パラメーターをプロンプトへ反映
 - 参照MIDI特徴（音域/密度/リズム）を埋め込み
+- 参照MIDIイベント列（`MidiReferenceSummary.events`）をLLM入力へ含める
 
 設計ポイント:
 
@@ -275,9 +275,9 @@ pub enum UiState {
 
 ### 6.2 UP-2 参照MIDIを使った生成
 
-1. `MidiLoader` がファイルを読み込み
+1. `MidiLoader` がファイルを読み込み、サマリとイベント列を抽出
 2. `MidiAnalyzer` が特徴抽出
-3. 抽出結果を`PromptBuilder`へ注入
+3. 抽出結果とイベント列を `PromptBuilder` へ注入
 4. 以後UP-1と同様
 
 ### 6.3 UP-3 続き生成
