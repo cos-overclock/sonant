@@ -1,8 +1,3 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use midly::num::{u4, u7, u15, u28};
 use midly::{Format, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
 use sonant::app::{LoadMidiCommand, LoadMidiOutcome, LoadMidiUseCase};
@@ -11,9 +6,18 @@ use sonant::domain::{
     ReferenceSlot,
 };
 
+#[path = "support/temp_file_fixture.rs"]
+mod temp_file_fixture;
+
+use temp_file_fixture::write_midi_file;
+
 #[test]
 fn generation_request_references_are_built_from_loaded_midi_file() {
-    let midi_file = write_midi_file("mid", smf_with_notes(&[60, 64]));
+    let midi_file = write_midi_file(
+        "sonant-fr03a-reference-flow",
+        "mid",
+        &smf_with_notes(&[60, 64]),
+    );
     let use_case = LoadMidiUseCase::new();
 
     let load_outcome = use_case
@@ -56,8 +60,12 @@ fn generation_request_references_are_built_from_loaded_midi_file() {
 
 #[test]
 fn continuation_request_tracks_reference_replace_and_clear_transitions() {
-    let first_midi = write_midi_file("mid", smf_with_notes(&[60]));
-    let second_midi = write_midi_file("mid", smf_with_notes(&[67, 72]));
+    let first_midi = write_midi_file("sonant-fr03a-reference-flow", "mid", &smf_with_notes(&[60]));
+    let second_midi = write_midi_file(
+        "sonant-fr03a-reference-flow",
+        "mid",
+        &smf_with_notes(&[67, 72]),
+    );
     let use_case = LoadMidiUseCase::new();
 
     let first_outcome = use_case
@@ -194,43 +202,5 @@ fn smf_with_notes(note_pitches: &[u8]) -> Smf<'static> {
     Smf {
         header: Header::new(Format::SingleTrack, Timing::Metrical(u15::new(96))),
         tracks: vec![track],
-    }
-}
-
-fn write_midi_file(extension: &str, smf: Smf<'static>) -> TestFile {
-    let mut bytes = Vec::new();
-    smf.write_std(&mut bytes)
-        .expect("integration test MIDI serialization must succeed");
-    write_bytes_file(extension, &bytes)
-}
-
-fn write_bytes_file(extension: &str, bytes: &[u8]) -> TestFile {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock should be after UNIX_EPOCH")
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "sonant-fr03a-reference-flow-{nanos}-{id}.{extension}"
-    ));
-
-    fs::write(&path, bytes).expect("integration test fixture file must be writable");
-    TestFile { path }
-}
-
-struct TestFile {
-    path: PathBuf,
-}
-
-impl TestFile {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TestFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
     }
 }

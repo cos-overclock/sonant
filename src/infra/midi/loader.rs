@@ -199,15 +199,19 @@ impl Default for TimeSignature {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use midly::num::{u4, u7, u15, u28};
     use midly::{
         Format, Fps, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind,
     };
+
+    mod temp_file_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/temp_file_fixture.rs"
+        ));
+    }
+
+    use temp_file_fixture::{write_bytes_file, write_midi_file};
 
     use super::{MidiLoadError, load_midi_reference, load_midi_summary};
 
@@ -287,7 +291,7 @@ mod tests {
             ]],
         };
 
-        let midi_file = write_midi_file("mid", smf);
+        let midi_file = write_midi_file("sonant-midi-loader", "mid", &smf);
         let summary = load_midi_summary(midi_file.path()).expect("valid midi should load");
 
         assert_eq!(summary.bars, 2);
@@ -338,7 +342,7 @@ mod tests {
             ]],
         };
 
-        let midi_file = write_midi_file("mid", smf);
+        let midi_file = write_midi_file("sonant-midi-loader", "mid", &smf);
         let summary = load_midi_summary(midi_file.path()).expect("valid midi should load");
 
         // Without an explicit time-signature event, loader should use default 4/4.
@@ -385,7 +389,7 @@ mod tests {
             ]],
         };
 
-        let midi_file = write_midi_file("mid", smf);
+        let midi_file = write_midi_file("sonant-midi-loader", "mid", &smf);
         let reference = load_midi_reference(midi_file.path()).expect("valid midi should load");
 
         assert_eq!(reference.summary.note_count, 1);
@@ -398,7 +402,7 @@ mod tests {
 
     #[test]
     fn load_midi_summary_rejects_unsupported_extension() {
-        let midi_file = write_bytes_file("txt", b"dummy");
+        let midi_file = write_bytes_file("sonant-midi-loader", "txt", b"dummy");
         let err = load_midi_summary(midi_file.path()).expect_err("non-midi extension must fail");
 
         assert!(matches!(err, MidiLoadError::UnsupportedExtension { .. }));
@@ -414,7 +418,7 @@ mod tests {
 
     #[test]
     fn load_midi_summary_fails_on_corrupted_file() {
-        let midi_file = write_bytes_file("mid", &[0x00, 0x01, 0x02, 0x03]);
+        let midi_file = write_bytes_file("sonant-midi-loader", "mid", &[0x00, 0x01, 0x02, 0x03]);
         let err = load_midi_summary(midi_file.path()).expect_err("corrupted midi must fail");
 
         assert!(matches!(err, MidiLoadError::Parse { .. }));
@@ -442,7 +446,7 @@ mod tests {
             ]],
         };
 
-        let midi_file = write_midi_file("mid", smf);
+        let midi_file = write_midi_file("sonant-midi-loader", "mid", &smf);
         let err = load_midi_summary(midi_file.path()).expect_err("SMPTE/timecode timing must fail");
 
         assert_eq!(err, MidiLoadError::UnsupportedTiming);
@@ -458,46 +462,9 @@ mod tests {
             }]],
         };
 
-        let midi_file = write_midi_file("mid", smf);
+        let midi_file = write_midi_file("sonant-midi-loader", "mid", &smf);
         let err = load_midi_summary(midi_file.path()).expect_err("note-less midi must fail");
 
         assert_eq!(err, MidiLoadError::NoNoteEvents);
-    }
-
-    fn write_midi_file(extension: &str, smf: Smf<'static>) -> TestFile {
-        let mut bytes = Vec::new();
-        smf.write_std(&mut bytes)
-            .expect("test midi serialization must succeed");
-        write_bytes_file(extension, &bytes)
-    }
-
-    fn write_bytes_file(extension: &str, bytes: &[u8]) -> TestFile {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be monotonic")
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("sonant-midi-loader-{nanos}-{id}.{extension}"));
-
-        fs::write(&path, bytes).expect("test file must be writable");
-        TestFile { path }
-    }
-
-    struct TestFile {
-        path: PathBuf,
-    }
-
-    impl TestFile {
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestFile {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.path);
-        }
     }
 }
