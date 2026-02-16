@@ -19,8 +19,8 @@ use sonant::{
         LoadMidiCommand, LoadMidiUseCase,
     },
     domain::{
-        GenerationMode, GenerationParams, GenerationRequest, GenerationResult, LlmError, ModelRef,
-        ReferenceSlot, has_supported_midi_extension,
+        GenerationMode, GenerationParams, GenerationRequest, GenerationResult, LlmError,
+        MidiReferenceSummary, ModelRef, ReferenceSlot, has_supported_midi_extension,
     },
     infra::llm::{AnthropicProvider, LlmProvider, OpenAiCompatibleProvider, ProviderRegistry},
 };
@@ -223,7 +223,10 @@ impl SonantMainWindow {
         }
 
         let prompt = self.prompt_input.read(cx).value().to_string();
-        let mut request = match self.submission_model.prepare_request(prompt) {
+        let request = match self
+            .submission_model
+            .prepare_request(prompt, self.load_midi_use_case.snapshot_references())
+        {
             Ok(request) => request,
             Err(LlmError::Validation { .. }) => {
                 self.generation_status = HelperGenerationStatus::Idle;
@@ -242,7 +245,7 @@ impl SonantMainWindow {
             }
         };
 
-        request.references = self.load_midi_use_case.snapshot_references();
+        // `prepare_request` only validates prompt text; run full contract validation here.
         if let Err(error) = request.validate() {
             self.generation_status = HelperGenerationStatus::Failed {
                 message: error.user_message(),
@@ -822,13 +825,23 @@ impl PromptSubmissionModel {
         }
     }
 
-    fn prepare_request(&mut self, prompt: String) -> Result<GenerationRequest, LlmError> {
+    fn prepare_request(
+        &mut self,
+        prompt: String,
+        references: Vec<MidiReferenceSummary>,
+    ) -> Result<GenerationRequest, LlmError> {
         let request_id = format!(
             "{GPUI_HELPER_REQUEST_ID_PREFIX}-{}",
             self.next_request_number
         );
         self.next_request_number = self.next_request_number.saturating_add(1);
-        build_generation_request(request_id, self.model.clone(), prompt)
+        build_generation_request_with_prompt_validation(
+            request_id,
+            self.model.clone(),
+            GenerationMode::Melody,
+            prompt,
+            references,
+        )
     }
 
     fn set_model(&mut self, model: ModelRef) {
@@ -836,17 +849,21 @@ impl PromptSubmissionModel {
     }
 }
 
-fn build_generation_request(
+/// Builds a request after validating only prompt text.
+/// Callers must run `GenerationRequest::validate()` before submission.
+fn build_generation_request_with_prompt_validation(
     request_id: String,
     model: ModelRef,
+    mode: GenerationMode,
     prompt: String,
+    references: Vec<MidiReferenceSummary>,
 ) -> Result<GenerationRequest, LlmError> {
     validate_prompt_input(&prompt)?;
 
-    let request = GenerationRequest {
+    Ok(GenerationRequest {
         request_id,
         model,
-        mode: GenerationMode::Melody,
+        mode,
         prompt,
         params: GenerationParams {
             bpm: DEFAULT_BPM,
@@ -858,12 +875,9 @@ fn build_generation_request(
             top_p: Some(DEFAULT_TOP_P),
             max_tokens: Some(DEFAULT_MAX_TOKENS),
         },
-        references: Vec::new(),
+        references,
         variation_count: DEFAULT_VARIATION_COUNT,
-    };
-
-    request.validate()?;
-    Ok(request)
+    })
 }
 
 fn validate_prompt_input(prompt: &str) -> Result<(), LlmError> {
@@ -945,17 +959,41 @@ fn normalize_api_key_input(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PromptSubmissionModel, build_generation_request, choose_dropped_midi_path,
-        display_file_name_from_path, has_supported_midi_extension, normalize_api_key_input,
-        parse_truthy_flag, prompt_preview, validate_prompt_input,
+        PromptSubmissionModel, build_generation_request_with_prompt_validation,
+        choose_dropped_midi_path, display_file_name_from_path, has_supported_midi_extension,
+        normalize_api_key_input, parse_truthy_flag, prompt_preview, validate_prompt_input,
     };
-    use sonant::domain::ModelRef;
+    use sonant::domain::{
+        FileReferenceInput, GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary,
+        ModelRef, ReferenceSlot, ReferenceSource,
+    };
     use std::path::{Path, PathBuf};
 
     fn test_model() -> ModelRef {
         ModelRef {
             provider: "anthropic".to_string(),
             model: "claude-3-5-sonnet".to_string(),
+        }
+    }
+
+    fn test_reference(path: &str) -> MidiReferenceSummary {
+        MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: path.to_string(),
+            }),
+            bars: 4,
+            note_count: 16,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+            events: vec![MidiReferenceEvent {
+                track: 0,
+                absolute_tick: 0,
+                delta_tick: 0,
+                event: "NoteOn channel=0 key=60 vel=100".to_string(),
+            }],
         }
     }
 
@@ -972,8 +1010,14 @@ mod tests {
     #[test]
     fn build_generation_request_reflects_prompt_text() {
         let prompt = "  warm synth melody with syncopation  ".to_string();
-        let request = build_generation_request("req-1".to_string(), test_model(), prompt.clone())
-            .expect("request should be built for non-empty prompt");
+        let request = build_generation_request_with_prompt_validation(
+            "req-1".to_string(),
+            test_model(),
+            GenerationMode::Melody,
+            prompt.clone(),
+            Vec::new(),
+        )
+        .expect("request should be built for non-empty prompt");
 
         assert_eq!(request.prompt, prompt);
     }
@@ -983,16 +1027,60 @@ mod tests {
         let mut model = PromptSubmissionModel::new(test_model());
 
         let first = model
-            .prepare_request("first prompt".to_string())
+            .prepare_request("first prompt".to_string(), Vec::new())
             .expect("first prompt should be accepted");
         let second = model
-            .prepare_request("second prompt".to_string())
+            .prepare_request("second prompt".to_string(), Vec::new())
             .expect("second prompt should be accepted");
 
         assert_eq!(first.request_id, "gpui-helper-req-1");
         assert_eq!(second.request_id, "gpui-helper-req-2");
         assert_eq!(first.prompt, "first prompt");
         assert_eq!(second.prompt, "second prompt");
+    }
+
+    #[test]
+    fn submission_model_injects_references_into_request() {
+        let mut model = PromptSubmissionModel::new(test_model());
+        let references = vec![test_reference("/tmp/reference.mid")];
+
+        let request = model
+            .prepare_request("continue this".to_string(), references.clone())
+            .expect("request should be prepared");
+
+        assert_eq!(request.references, references);
+    }
+
+    #[test]
+    fn continuation_validation_requires_reference_after_conversion() {
+        let request = build_generation_request_with_prompt_validation(
+            "req-cont".to_string(),
+            test_model(),
+            GenerationMode::Continuation,
+            "continue this phrase".to_string(),
+            Vec::new(),
+        )
+        .expect("request construction should succeed before full validation");
+
+        assert!(matches!(
+            request.validate(),
+            Err(LlmError::Validation { message })
+            if message == "continuation mode requires at least one MIDI reference"
+        ));
+    }
+
+    #[test]
+    fn continuation_validation_accepts_reference_after_conversion() {
+        let request = build_generation_request_with_prompt_validation(
+            "req-cont".to_string(),
+            test_model(),
+            GenerationMode::Continuation,
+            "continue this phrase".to_string(),
+            vec![test_reference("/tmp/continuation_seed.mid")],
+        )
+        .expect("request construction should succeed");
+
+        assert!(request.validate().is_ok());
     }
 
     #[test]
