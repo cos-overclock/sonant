@@ -245,6 +245,26 @@ mod tests {
     }
 
     #[test]
+    fn submission_model_preserves_multiple_reference_slots_in_request() {
+        let mut model = PromptSubmissionModel::new(test_model());
+        let references = vec![
+            test_reference_with_slot("/tmp/melody.mid", ReferenceSlot::Melody),
+            test_reference_with_slot("/tmp/chords.mid", ReferenceSlot::ChordProgression),
+            test_reference_with_slot("/tmp/drums.mid", ReferenceSlot::DrumPattern),
+        ];
+
+        let request = model
+            .prepare_request(
+                GenerationMode::Continuation,
+                "continue from multiple references".to_string(),
+                references.clone(),
+            )
+            .expect("request should preserve all reference slots");
+
+        assert_eq!(request.references, references);
+    }
+
+    #[test]
     fn continuation_validation_requires_reference_after_conversion() {
         let request = build_generation_request_with_prompt_validation(
             "req-cont".to_string(),
@@ -343,6 +363,7 @@ mod tests {
             (GenerationMode::CounterMelody, &melody_reference, true),
             (GenerationMode::Harmony, &melody_reference, true),
             (GenerationMode::Continuation, &melody_reference, true),
+            (GenerationMode::Continuation, &chord_reference, true),
             (GenerationMode::Bassline, &melody_reference, true),
             (GenerationMode::Bassline, &chord_reference, true),
         ];
@@ -443,8 +464,10 @@ mod tests {
                 message: "file locked".to_string(),
             },
         };
-        let io_state = MidiSlotErrorState::from_load_error("/tmp/retry.mid", &io_error);
+        let io_state =
+            MidiSlotErrorState::from_load_error(ReferenceSlot::Melody, "/tmp/retry.mid", &io_error);
         assert!(io_state.can_retry());
+        assert_eq!(io_state.slot, ReferenceSlot::Melody);
         assert_eq!(io_state.retry_path.as_deref(), Some("/tmp/retry.mid"));
 
         let parse_error = LoadMidiError::LoadFailed {
@@ -452,17 +475,26 @@ mod tests {
                 message: "invalid chunk".to_string(),
             },
         };
-        let parse_state = MidiSlotErrorState::from_load_error("/tmp/broken.mid", &parse_error);
+        let parse_state = MidiSlotErrorState::from_load_error(
+            ReferenceSlot::CounterMelody,
+            "/tmp/broken.mid",
+            &parse_error,
+        );
         assert!(parse_state.can_retry());
+        assert_eq!(parse_state.slot, ReferenceSlot::CounterMelody);
 
         let extension_error = LoadMidiError::LoadFailed {
             source: MidiLoadError::UnsupportedExtension {
                 path: "/tmp/invalid.wav".to_string(),
             },
         };
-        let extension_state =
-            MidiSlotErrorState::from_load_error("/tmp/invalid.wav", &extension_error);
+        let extension_state = MidiSlotErrorState::from_load_error(
+            ReferenceSlot::Harmony,
+            "/tmp/invalid.wav",
+            &extension_error,
+        );
         assert!(!extension_state.can_retry());
+        assert_eq!(extension_state.slot, ReferenceSlot::Harmony);
         assert_eq!(extension_state.retry_path, None);
     }
 

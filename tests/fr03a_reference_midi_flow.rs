@@ -31,7 +31,7 @@ fn generation_request_references_are_built_from_loaded_midi_file() {
         load_outcome,
         LoadMidiOutcome::Loaded {
             slot: ReferenceSlot::Melody,
-            replaced: false,
+            slot_reference_count: 1,
             ..
         }
     ));
@@ -59,7 +59,7 @@ fn generation_request_references_are_built_from_loaded_midi_file() {
 }
 
 #[test]
-fn continuation_request_tracks_reference_replace_and_clear_transitions() {
+fn continuation_request_tracks_reference_append_and_clear_transitions() {
     let first_midi = write_midi_file("sonant-fr03a-reference-flow", "mid", &smf_with_notes(&[60]));
     let second_midi = write_midi_file(
         "sonant-fr03a-reference-flow",
@@ -78,41 +78,49 @@ fn continuation_request_tracks_reference_replace_and_clear_transitions() {
         first_outcome,
         LoadMidiOutcome::Loaded {
             slot: ReferenceSlot::Melody,
-            replaced: false,
+            slot_reference_count: 1,
             ..
         }
     ));
 
-    let replaced_outcome = use_case
+    let appended_outcome = use_case
         .execute(LoadMidiCommand::SetFile {
             slot: ReferenceSlot::Melody,
             path: second_midi.path().display().to_string(),
         })
-        .expect("replacement MIDI load should succeed");
+        .expect("second MIDI append should succeed");
     assert!(matches!(
-        replaced_outcome,
+        appended_outcome,
         LoadMidiOutcome::Loaded {
             slot: ReferenceSlot::Melody,
-            replaced: true,
+            slot_reference_count: 2,
             ..
         }
     ));
 
-    let request_after_replace =
+    let request_after_append =
         valid_request(GenerationMode::Continuation, use_case.snapshot_references());
-    request_after_replace
+    request_after_append
         .validate()
         .expect("continuation request should stay valid while slot is populated");
-    assert_eq!(request_after_replace.references.len(), 1);
-    assert_eq!(request_after_replace.references[0].note_count, 2);
+    assert_eq!(request_after_append.references.len(), 2);
     assert_eq!(
-        request_after_replace.references[0]
+        request_after_append.references[0]
+            .file
+            .as_ref()
+            .expect("file metadata should be present")
+            .path,
+        first_midi.path().to_string_lossy().to_string()
+    );
+    assert_eq!(
+        request_after_append.references[1]
             .file
             .as_ref()
             .expect("file metadata should be present")
             .path,
         second_midi.path().to_string_lossy().to_string()
     );
+    assert_eq!(request_after_append.references[1].note_count, 2);
 
     let clear_outcome = use_case
         .execute(LoadMidiCommand::ClearSlot {
@@ -123,7 +131,7 @@ fn continuation_request_tracks_reference_replace_and_clear_transitions() {
         clear_outcome,
         LoadMidiOutcome::Cleared {
             slot: ReferenceSlot::Melody,
-            had_reference: true,
+            cleared_count: 2,
         }
     );
 

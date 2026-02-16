@@ -18,12 +18,12 @@ pub enum LoadMidiCommand {
 pub enum LoadMidiOutcome {
     Loaded {
         slot: ReferenceSlot,
-        replaced: bool,
+        slot_reference_count: usize,
         reference: MidiReferenceSummary,
     },
     Cleared {
         slot: ReferenceSlot,
-        had_reference: bool,
+        cleared_count: usize,
     },
 }
 
@@ -126,6 +126,14 @@ impl LoadMidiUseCase {
         state.slot_reference(slot)
     }
 
+    pub fn slot_references(&self, slot: ReferenceSlot) -> Vec<MidiReferenceSummary> {
+        let state = self
+            .state
+            .lock()
+            .expect("load MIDI state lock poisoned while reading slot references");
+        state.slot_references(slot)
+    }
+
     fn set_file(
         &self,
         slot: ReferenceSlot,
@@ -142,11 +150,11 @@ impl LoadMidiUseCase {
             .state
             .lock()
             .expect("load MIDI state lock poisoned while writing slot reference");
-        let replaced = state.upsert(reference.clone());
+        let slot_reference_count = state.append(reference.clone());
 
         Ok(LoadMidiOutcome::Loaded {
             slot,
-            replaced,
+            slot_reference_count,
             reference,
         })
     }
@@ -156,10 +164,10 @@ impl LoadMidiUseCase {
             .state
             .lock()
             .expect("load MIDI state lock poisoned while clearing slot reference");
-        let had_reference = state.clear(slot);
+        let cleared_count = state.clear(slot);
         LoadMidiOutcome::Cleared {
             slot,
-            had_reference,
+            cleared_count,
         }
     }
 }
@@ -176,31 +184,16 @@ struct ReferenceSlotState {
 }
 
 impl ReferenceSlotState {
-    fn upsert(&mut self, reference: MidiReferenceSummary) -> bool {
-        if let Some(existing) = self
-            .references
-            .iter_mut()
-            .find(|existing| existing.slot == reference.slot)
-        {
-            *existing = reference;
-            true
-        } else {
-            self.references.push(reference);
-            false
-        }
+    fn append(&mut self, reference: MidiReferenceSummary) -> usize {
+        let slot = reference.slot;
+        self.references.push(reference);
+        self.slot_reference_count(slot)
     }
 
-    fn clear(&mut self, slot: ReferenceSlot) -> bool {
-        if let Some(index) = self
-            .references
-            .iter()
-            .position(|reference| reference.slot == slot)
-        {
-            self.references.remove(index);
-            true
-        } else {
-            false
-        }
+    fn clear(&mut self, slot: ReferenceSlot) -> usize {
+        let before_len = self.references.len();
+        self.references.retain(|reference| reference.slot != slot);
+        before_len.saturating_sub(self.references.len())
     }
 
     fn snapshot(&self) -> Vec<MidiReferenceSummary> {
@@ -210,8 +203,24 @@ impl ReferenceSlotState {
     fn slot_reference(&self, slot: ReferenceSlot) -> Option<MidiReferenceSummary> {
         self.references
             .iter()
+            .rev()
             .find(|reference| reference.slot == slot)
             .cloned()
+    }
+
+    fn slot_references(&self, slot: ReferenceSlot) -> Vec<MidiReferenceSummary> {
+        self.references
+            .iter()
+            .filter(|reference| reference.slot == slot)
+            .cloned()
+            .collect()
+    }
+
+    fn slot_reference_count(&self, slot: ReferenceSlot) -> usize {
+        self.references
+            .iter()
+            .filter(|reference| reference.slot == slot)
+            .count()
     }
 }
 
@@ -306,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn load_replace_clear_flow_is_supported_for_a_slot() {
+    fn load_append_clear_flow_is_supported_for_a_slot() {
         let first_path = temp_test_path("first.mid");
         let second_path = temp_test_path("second.mid");
 
@@ -327,12 +336,12 @@ mod tests {
             loaded,
             LoadMidiOutcome::Loaded {
                 slot: ReferenceSlot::Melody,
-                replaced: false,
+                slot_reference_count: 1,
                 ..
             }
         ));
 
-        let replaced = use_case
+        let appended = use_case
             .execute(LoadMidiCommand::SetFile {
                 slot: ReferenceSlot::Melody,
                 path: second_path.to_string_lossy().to_string(),
@@ -340,17 +349,19 @@ mod tests {
             .expect("second load should succeed");
 
         assert!(matches!(
-            replaced,
+            appended,
             LoadMidiOutcome::Loaded {
                 slot: ReferenceSlot::Melody,
-                replaced: true,
+                slot_reference_count: 2,
                 ..
             }
         ));
 
+        let slot_references = use_case.slot_references(ReferenceSlot::Melody);
+        assert_eq!(slot_references.len(), 2);
         let current = use_case
             .slot_reference(ReferenceSlot::Melody)
-            .expect("slot should contain a reference after replacement");
+            .expect("slot should contain a latest reference after appending");
         assert_eq!(
             current.file.expect("file metadata must exist").path,
             second_path.to_string_lossy()
@@ -367,13 +378,80 @@ mod tests {
             cleared,
             LoadMidiOutcome::Cleared {
                 slot: ReferenceSlot::Melody,
-                had_reference: true,
+                cleared_count: 2,
             }
         );
         assert!(use_case.slot_reference(ReferenceSlot::Melody).is_none());
+        assert!(use_case.slot_references(ReferenceSlot::Melody).is_empty());
         assert!(use_case.snapshot_references().is_empty());
 
         assert_eq!(loader.seen_paths(), vec![first_path, second_path]);
+    }
+
+    #[test]
+    fn multiple_slots_can_be_loaded_and_cleared_independently() {
+        let melody_path = temp_test_path("melody.mid");
+        let chord_path = temp_test_path("chords.mid");
+
+        let loader = Arc::new(StubLoader::new(vec![
+            Ok(sample_reference_data(4, 16, 60, 72, "melody")),
+            Ok(sample_reference_data(4, 12, 48, 67, "chords")),
+        ]));
+        let use_case = LoadMidiUseCase::with_loader(loader.clone());
+
+        use_case
+            .execute(LoadMidiCommand::SetFile {
+                slot: ReferenceSlot::Melody,
+                path: melody_path.to_string_lossy().to_string(),
+            })
+            .expect("melody slot load should succeed");
+        use_case
+            .execute(LoadMidiCommand::SetFile {
+                slot: ReferenceSlot::ChordProgression,
+                path: chord_path.to_string_lossy().to_string(),
+            })
+            .expect("chord slot load should succeed");
+
+        let before_clear = use_case.snapshot_references();
+        assert_eq!(before_clear.len(), 2);
+        assert!(
+            before_clear
+                .iter()
+                .any(|reference| reference.slot == ReferenceSlot::Melody)
+        );
+        assert!(
+            before_clear
+                .iter()
+                .any(|reference| reference.slot == ReferenceSlot::ChordProgression)
+        );
+
+        let clear_outcome = use_case
+            .execute(LoadMidiCommand::ClearSlot {
+                slot: ReferenceSlot::Melody,
+            })
+            .expect("clear should succeed");
+        assert_eq!(
+            clear_outcome,
+            LoadMidiOutcome::Cleared {
+                slot: ReferenceSlot::Melody,
+                cleared_count: 1,
+            }
+        );
+
+        assert!(use_case.slot_reference(ReferenceSlot::Melody).is_none());
+        let chord_reference = use_case
+            .slot_reference(ReferenceSlot::ChordProgression)
+            .expect("chord slot must remain after clearing melody slot");
+        assert_eq!(
+            chord_reference
+                .file
+                .expect("file metadata must exist for chord slot")
+                .path,
+            chord_path.to_string_lossy()
+        );
+        assert_eq!(use_case.snapshot_references().len(), 1);
+
+        assert_eq!(loader.seen_paths(), vec![melody_path, chord_path]);
     }
 
     #[test]
