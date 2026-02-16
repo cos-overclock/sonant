@@ -199,6 +199,28 @@ mod tests {
     }
 
     #[test]
+    fn submission_model_preserves_all_generation_modes() {
+        let mut model = PromptSubmissionModel::new(test_model());
+        let modes = [
+            GenerationMode::Melody,
+            GenerationMode::ChordProgression,
+            GenerationMode::DrumPattern,
+            GenerationMode::Bassline,
+            GenerationMode::CounterMelody,
+            GenerationMode::Harmony,
+            GenerationMode::Continuation,
+        ];
+
+        for (index, mode) in modes.into_iter().enumerate() {
+            let request = model
+                .prepare_request(mode, format!("prompt-{index}"), Vec::new())
+                .expect("prompt should be accepted");
+
+            assert_eq!(request.mode, mode);
+        }
+    }
+
+    #[test]
     fn submission_model_injects_references_into_request() {
         let mut model = PromptSubmissionModel::new(test_model());
         let references = vec![test_reference("/tmp/reference.mid")];
