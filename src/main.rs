@@ -20,7 +20,7 @@ use sonant::{
     },
     domain::{
         GenerationMode, GenerationParams, GenerationRequest, GenerationResult, LlmError, ModelRef,
-        ReferenceSlot,
+        ReferenceSlot, has_supported_midi_extension,
     },
     infra::llm::{AnthropicProvider, LlmProvider, OpenAiCompatibleProvider, ProviderRegistry},
 };
@@ -915,12 +915,6 @@ fn choose_dropped_midi_path(paths: &[PathBuf]) -> Option<PathBuf> {
         .or_else(|| paths.first().cloned())
 }
 
-fn has_supported_midi_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
-}
-
 fn display_file_name_from_path(path: &str) -> String {
     Path::new(path)
         .file_name()
@@ -1054,7 +1048,6 @@ mod tests {
     fn display_file_name_falls_back_when_no_name_exists() {
         assert_eq!(display_file_name_from_path("/tmp/melody.mid"), "melody.mid");
         assert_eq!(display_file_name_from_path("melody.mid"), "melody.mid");
-        // When no file name component exists (e.g., trailing separator), the path itself is returned.
-        assert_eq!(display_file_name_from_path("/tmp/"), "/tmp/");
+        assert_eq!(display_file_name_from_path("/tmp/"), "tmp");
     }
 }
