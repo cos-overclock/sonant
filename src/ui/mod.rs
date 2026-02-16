@@ -105,7 +105,10 @@ mod tests {
         PromptSubmissionModel, build_generation_request_with_prompt_validation,
         validate_prompt_input,
     };
-    use super::state::{MidiSlotErrorState, can_retry_midi_load_error};
+    use super::state::{
+        MidiSlotErrorState, can_retry_midi_load_error, mode_reference_requirement,
+        mode_reference_requirement_satisfied,
+    };
     use super::utils::{
         choose_dropped_midi_path, display_file_name_from_path, normalize_api_key_input,
         parse_truthy_flag, prompt_preview,
@@ -125,9 +128,9 @@ mod tests {
         }
     }
 
-    fn test_reference(path: &str) -> MidiReferenceSummary {
+    fn test_reference_with_slot(path: &str, slot: ReferenceSlot) -> MidiReferenceSummary {
         MidiReferenceSummary {
-            slot: ReferenceSlot::Melody,
+            slot,
             source: ReferenceSource::File,
             file: Some(FileReferenceInput {
                 path: path.to_string(),
@@ -144,6 +147,10 @@ mod tests {
                 event: "NoteOn channel=0 key=60 vel=100".to_string(),
             }],
         }
+    }
+
+    fn test_reference(path: &str) -> MidiReferenceSummary {
+        test_reference_with_slot(path, ReferenceSlot::Melody)
     }
 
     #[test]
@@ -267,6 +274,69 @@ mod tests {
         .expect("request construction should succeed");
 
         assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn mode_reference_requirement_labels_key_modes() {
+        let counter = mode_reference_requirement(GenerationMode::CounterMelody);
+        assert_eq!(counter.description, "Reference MIDI required: Melody.");
+        assert_eq!(
+            counter.unmet_message,
+            Some("Counter Melody mode requires a Melody reference MIDI before generating.")
+        );
+
+        let continuation = mode_reference_requirement(GenerationMode::Continuation);
+        assert_eq!(
+            continuation.description,
+            "Reference MIDI required: At least one slot."
+        );
+        assert_eq!(
+            continuation.unmet_message,
+            Some("Continuation mode requires at least one reference MIDI before generating.")
+        );
+
+        let melody = mode_reference_requirement(GenerationMode::Melody);
+        assert_eq!(melody.description, "Reference MIDI: Optional.");
+        assert_eq!(melody.unmet_message, None);
+    }
+
+    #[test]
+    fn mode_reference_requirement_satisfied_matches_mode_rules() {
+        let no_references = Vec::<MidiReferenceSummary>::new();
+        let melody_reference = vec![test_reference("/tmp/melody.mid")];
+        let chord_reference = vec![test_reference_with_slot(
+            "/tmp/chords.mid",
+            ReferenceSlot::ChordProgression,
+        )];
+
+        assert!(mode_reference_requirement_satisfied(
+            GenerationMode::Melody,
+            &no_references
+        ));
+        assert!(!mode_reference_requirement_satisfied(
+            GenerationMode::CounterMelody,
+            &no_references
+        ));
+        assert!(!mode_reference_requirement_satisfied(
+            GenerationMode::Continuation,
+            &no_references
+        ));
+        assert!(mode_reference_requirement_satisfied(
+            GenerationMode::CounterMelody,
+            &melody_reference
+        ));
+        assert!(mode_reference_requirement_satisfied(
+            GenerationMode::Continuation,
+            &melody_reference
+        ));
+        assert!(mode_reference_requirement_satisfied(
+            GenerationMode::Bassline,
+            &melody_reference
+        ));
+        assert!(mode_reference_requirement_satisfied(
+            GenerationMode::Bassline,
+            &chord_reference
+        ));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use gpui::rgb;
 use sonant::app::LoadMidiError;
+use sonant::domain::{GenerationMode, MidiReferenceSummary, ReferenceSlot};
 use sonant::infra::midi::MidiLoadError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +80,66 @@ impl MidiSlotErrorState {
 
     pub(super) fn can_retry(&self) -> bool {
         self.retry_path.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ModeReferenceRequirement {
+    pub(super) description: &'static str,
+    pub(super) unmet_message: Option<&'static str>,
+}
+
+pub(super) fn mode_reference_requirement(mode: GenerationMode) -> ModeReferenceRequirement {
+    match mode {
+        GenerationMode::Melody | GenerationMode::ChordProgression | GenerationMode::DrumPattern => {
+            ModeReferenceRequirement {
+                description: "Reference MIDI: Optional.",
+                unmet_message: None,
+            }
+        }
+        GenerationMode::Bassline => ModeReferenceRequirement {
+            description: "Reference MIDI required: Melody or Chord Progression.",
+            unmet_message: Some(
+                "Bassline mode requires a Melody or Chord Progression reference MIDI.",
+            ),
+        },
+        GenerationMode::CounterMelody => ModeReferenceRequirement {
+            description: "Reference MIDI required: Melody.",
+            unmet_message: Some(
+                "Counter Melody mode requires a Melody reference MIDI before generating.",
+            ),
+        },
+        GenerationMode::Harmony => ModeReferenceRequirement {
+            description: "Reference MIDI required: Melody.",
+            unmet_message: Some("Harmony mode requires a Melody reference MIDI before generating."),
+        },
+        GenerationMode::Continuation => ModeReferenceRequirement {
+            description: "Reference MIDI required: At least one slot.",
+            unmet_message: Some(
+                "Continuation mode requires at least one reference MIDI before generating.",
+            ),
+        },
+    }
+}
+
+pub(super) fn mode_reference_requirement_satisfied(
+    mode: GenerationMode,
+    references: &[MidiReferenceSummary],
+) -> bool {
+    match mode {
+        GenerationMode::Melody | GenerationMode::ChordProgression | GenerationMode::DrumPattern => {
+            true
+        }
+        GenerationMode::Bassline => references.iter().any(|reference| {
+            matches!(
+                reference.slot,
+                ReferenceSlot::Melody | ReferenceSlot::ChordProgression
+            )
+        }),
+        GenerationMode::CounterMelody | GenerationMode::Harmony => references
+            .iter()
+            .any(|reference| reference.slot == ReferenceSlot::Melody),
+        GenerationMode::Continuation => !references.is_empty(),
     }
 }
 
