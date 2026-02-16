@@ -343,6 +343,8 @@ mod tests {
             time: 0,
             port_index: 0,
             data: [0x90 | ((channel - 1) & 0x0F), note, 100],
+            is_transport_playing: true,
+            playhead_ppq: 0.0,
         }
     }
 

@@ -3,7 +3,7 @@ use clack_extensions::gui::PluginGui;
 use clack_extensions::note_ports::PluginNotePorts;
 use clack_extensions::state::PluginState;
 use clack_plugin::events::Match;
-use clack_plugin::events::event_types::MidiEvent;
+use clack_plugin::events::event_types::{MidiEvent, TransportFlags};
 use clack_plugin::events::spaces::CoreEventSpace;
 use clack_plugin::prelude::*;
 use crossbeam_queue::ArrayQueue;
@@ -61,26 +61,103 @@ impl DefaultPluginFactory for SonantPlugin {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 struct RtMidiEvent {
     time: u32,
     port_index: u16,
     data: [u8; 3],
+    transport: RtTransportState,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct LiveInputEvent {
     pub time: u32,
     pub port_index: u16,
     pub data: [u8; 3],
+    pub is_transport_playing: bool,
+    pub playhead_ppq: f64,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct RtTransportState {
+    is_playing: bool,
+    playhead_ppq: f64,
+}
+
+impl Default for RtTransportState {
+    fn default() -> Self {
+        Self {
+            is_playing: false,
+            playhead_ppq: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct TransportSnapshot {
+    is_playing: bool,
+    playhead_ppq_at_block_start: f64,
+    tempo_bpm: Option<f64>,
+    sample_rate_hz: f64,
+}
+
+impl TransportSnapshot {
+    fn from_process(process: Process<'_>, sample_rate_hz: f64) -> Self {
+        let mut snapshot = Self {
+            is_playing: false,
+            playhead_ppq_at_block_start: 0.0,
+            tempo_bpm: None,
+            sample_rate_hz,
+        };
+
+        let Some(transport) = process.transport else {
+            return snapshot;
+        };
+
+        let flags = transport.flags;
+        snapshot.is_playing = flags.contains(TransportFlags::IS_PLAYING);
+        if flags.contains(TransportFlags::HAS_BEATS_TIMELINE) {
+            let ppq = transport.song_pos_beats.to_float();
+            if ppq.is_finite() && ppq >= 0.0 {
+                snapshot.playhead_ppq_at_block_start = ppq;
+            }
+        }
+        if flags.contains(TransportFlags::HAS_TEMPO) {
+            let tempo = transport.tempo;
+            if tempo.is_finite() && tempo > 0.0 {
+                snapshot.tempo_bpm = Some(tempo);
+            }
+        }
+
+        snapshot
+    }
+
+    fn event_transport(self, sample_offset: u32) -> RtTransportState {
+        let mut playhead_ppq = self.playhead_ppq_at_block_start;
+        if let Some(tempo_bpm) = self.tempo_bpm
+            && self.sample_rate_hz.is_finite()
+            && self.sample_rate_hz > 0.0
+        {
+            playhead_ppq += f64::from(sample_offset) / self.sample_rate_hz * (tempo_bpm / 60.0);
+        }
+        if !playhead_ppq.is_finite() || playhead_ppq < 0.0 {
+            playhead_ppq = 0.0;
+        }
+
+        RtTransportState {
+            is_playing: self.is_playing,
+            playhead_ppq,
+        }
+    }
 }
 
 impl RtMidiEvent {
-    fn from_midi(event: &MidiEvent) -> Self {
+    fn from_midi(event: &MidiEvent, transport: RtTransportState) -> Self {
         Self {
             time: event.time(),
             port_index: event.port_index(),
             data: event.data(),
+            transport,
         }
     }
 
@@ -93,13 +170,22 @@ impl RtMidiEvent {
             time: self.time,
             port_index: self.port_index,
             data: self.data,
+            is_transport_playing: self.transport.is_playing,
+            playhead_ppq: self.transport.playhead_ppq,
         }
     }
 }
 
-fn map_input_event(event: &UnknownEvent, allow_note_events: bool) -> Option<RtMidiEvent> {
+fn map_input_event(
+    event: &UnknownEvent,
+    allow_note_events: bool,
+    transport_snapshot: TransportSnapshot,
+) -> Option<RtMidiEvent> {
     match event.as_core_event() {
-        Some(CoreEventSpace::Midi(event)) => Some(RtMidiEvent::from_midi(event)),
+        Some(CoreEventSpace::Midi(event)) => Some(RtMidiEvent::from_midi(
+            event,
+            transport_snapshot.event_transport(event.time()),
+        )),
         Some(CoreEventSpace::NoteOn(event)) if allow_note_events => note_event_to_midi(
             event.time(),
             event.port_index(),
@@ -107,6 +193,7 @@ fn map_input_event(event: &UnknownEvent, allow_note_events: bool) -> Option<RtMi
             event.key(),
             event.velocity(),
             true,
+            transport_snapshot.event_transport(event.time()),
         ),
         Some(CoreEventSpace::NoteOff(event)) if allow_note_events => note_event_to_midi(
             event.time(),
@@ -115,6 +202,7 @@ fn map_input_event(event: &UnknownEvent, allow_note_events: bool) -> Option<RtMi
             event.key(),
             event.velocity(),
             false,
+            transport_snapshot.event_transport(event.time()),
         ),
         Some(CoreEventSpace::NoteChoke(event)) if allow_note_events => note_event_to_midi(
             event.time(),
@@ -123,6 +211,7 @@ fn map_input_event(event: &UnknownEvent, allow_note_events: bool) -> Option<RtMi
             event.key(),
             0.0,
             false,
+            transport_snapshot.event_transport(event.time()),
         ),
         _ => None,
     }
@@ -139,6 +228,7 @@ fn note_event_to_midi(
     key: Match<u16>,
     velocity: f64,
     is_note_on: bool,
+    transport: RtTransportState,
 ) -> Option<RtMidiEvent> {
     let port_index = port_index.into_specific()?;
     let channel = channel.into_specific()?;
@@ -154,6 +244,7 @@ fn note_event_to_midi(
         time,
         port_index,
         data: [status, key as u8, velocity_to_midi_byte(velocity)],
+        transport,
     })
 }
 
@@ -245,6 +336,8 @@ impl SonantShared {
                 time: event.time,
                 port_index: event.port_index,
                 data: event.data,
+                is_transport_playing: event.transport.is_playing,
+                playhead_ppq: event.transport.playhead_ppq,
             })
     }
 
@@ -254,6 +347,7 @@ impl SonantShared {
             time,
             port_index,
             data,
+            transport: RtTransportState::default(),
         });
     }
 }
@@ -264,6 +358,8 @@ impl From<LiveInputEvent> for crate::app::LiveInputEvent {
             time: event.time,
             port_index: event.port_index,
             data: event.data,
+            is_transport_playing: event.is_transport_playing,
+            playhead_ppq: event.playhead_ppq,
         }
     }
 }
@@ -292,6 +388,7 @@ pub struct SonantAudioProcessor<'a> {
     host: HostAudioProcessorHandle<'a>,
     midi_bridge: Arc<MidiBridge>,
     pending_output_event: Option<RtMidiEvent>,
+    sample_rate_hz: f64,
 }
 
 impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
@@ -301,29 +398,38 @@ impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
         host: HostAudioProcessorHandle<'a>,
         _main_thread: &mut SonantPluginMainThread<'a>,
         shared: &'a SonantShared,
-        _audio_config: PluginAudioConfiguration,
+        audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
         shared.reset_queues();
+        let sample_rate_hz =
+            if audio_config.sample_rate.is_finite() && audio_config.sample_rate > 0.0 {
+                audio_config.sample_rate
+            } else {
+                44_100.0
+            };
         Ok(Self {
             host,
             midi_bridge: Arc::clone(&shared.midi_bridge),
             pending_output_event: None,
+            sample_rate_hz,
         })
     }
 
     fn process(
         &mut self,
-        _process: Process,
+        process: Process,
         _audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
         // Some hosts can emit both MIDI and Note events for the same performance data.
         // Prefer raw MIDI when present to avoid double-counting live notes.
         let allow_note_events = should_accept_note_events(events.input.iter());
+        let transport_snapshot = TransportSnapshot::from_process(process, self.sample_rate_hz);
 
         let mut received_live_input = false;
         for event in events.input.iter() {
-            if let Some(midi_event) = map_input_event(event, allow_note_events) {
+            if let Some(midi_event) = map_input_event(event, allow_note_events, transport_snapshot)
+            {
                 self.midi_bridge.push_live_input(midi_event);
                 received_live_input = true;
             }
@@ -369,27 +475,44 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::sync::Arc;
 
+    fn default_transport() -> RtTransportState {
+        RtTransportState::default()
+    }
+
+    fn default_transport_snapshot() -> TransportSnapshot {
+        TransportSnapshot {
+            is_playing: false,
+            playhead_ppq_at_block_start: 0.0,
+            tempo_bpm: None,
+            sample_rate_hz: 44_100.0,
+        }
+    }
+
     #[test]
     fn map_input_event_converts_note_events_to_midi() {
         let note_on = NoteOnEvent::new(12, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.5);
-        let mapped_on = map_input_event(note_on.as_ref(), true).expect("note on should convert");
+        let mapped_on = map_input_event(note_on.as_ref(), true, default_transport_snapshot())
+            .expect("note on should convert");
         assert_eq!(
             mapped_on,
             RtMidiEvent {
                 time: 12,
                 port_index: 0,
                 data: [0x92, 64, 64],
+                transport: default_transport(),
             }
         );
 
         let note_off = NoteOffEvent::new(15, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.25);
-        let mapped_off = map_input_event(note_off.as_ref(), true).expect("note off should convert");
+        let mapped_off = map_input_event(note_off.as_ref(), true, default_transport_snapshot())
+            .expect("note off should convert");
         assert_eq!(
             mapped_off,
             RtMidiEvent {
                 time: 15,
                 port_index: 0,
                 data: [0x82, 64, 32],
+                transport: default_transport(),
             }
         );
     }
@@ -399,20 +522,22 @@ mod tests {
         let wildcard_note =
             NoteOnEvent::new(0, Pckn::new(Match::<u16>::All, 1u16, 64u16, 0u32), 1.0);
 
-        assert!(map_input_event(wildcard_note.as_ref(), true).is_none());
+        assert!(
+            map_input_event(wildcard_note.as_ref(), true, default_transport_snapshot()).is_none()
+        );
     }
 
     #[test]
     fn map_input_event_ignores_note_events_when_disabled() {
         let note_on = NoteOnEvent::new(12, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.5);
-        assert!(map_input_event(note_on.as_ref(), false).is_none());
+        assert!(map_input_event(note_on.as_ref(), false, default_transport_snapshot()).is_none());
     }
 
     #[test]
     fn map_input_event_passes_through_midi_events() {
         let midi_event = MidiEvent::new(8, 1, [0x90, 60, 100]);
-        let mapped =
-            map_input_event(midi_event.as_ref(), true).expect("midi events should pass through");
+        let mapped = map_input_event(midi_event.as_ref(), true, default_transport_snapshot())
+            .expect("midi events should pass through");
 
         assert_eq!(
             mapped,
@@ -420,6 +545,29 @@ mod tests {
                 time: 8,
                 port_index: 1,
                 data: [0x90, 60, 100],
+                transport: default_transport(),
+            }
+        );
+    }
+
+    #[test]
+    fn map_input_event_attaches_transport_playhead_using_sample_offset() {
+        let note_on = NoteOnEvent::new(24_000, Pckn::new(0u16, 0u16, 64u16, 0u32), 0.5);
+        let snapshot = TransportSnapshot {
+            is_playing: true,
+            playhead_ppq_at_block_start: 8.0,
+            tempo_bpm: Some(120.0),
+            sample_rate_hz: 48_000.0,
+        };
+
+        let mapped =
+            map_input_event(note_on.as_ref(), true, snapshot).expect("note on should convert");
+
+        assert_eq!(
+            mapped.transport,
+            RtTransportState {
+                is_playing: true,
+                playhead_ppq: 9.0,
             }
         );
     }
@@ -447,16 +595,19 @@ mod tests {
             time: 1,
             port_index: 0,
             data: [0x90, 60, 100],
+            transport: default_transport(),
         };
         let event_2 = RtMidiEvent {
             time: 2,
             port_index: 0,
             data: [0x90, 61, 100],
+            transport: default_transport(),
         };
         let event_3 = RtMidiEvent {
             time: 3,
             port_index: 0,
             data: [0x90, 62, 100],
+            transport: default_transport(),
         };
 
         bridge.push_generated_output(event_1);
@@ -475,11 +626,13 @@ mod tests {
             time: 1,
             port_index: 0,
             data: [0x90, 60, 1],
+            transport: default_transport(),
         });
         bridge.push_generated_output(RtMidiEvent {
             time: 2,
             port_index: 0,
             data: [0x80, 60, 0],
+            transport: default_transport(),
         });
 
         bridge.reset();
@@ -497,6 +650,10 @@ mod tests {
             time: 10,
             port_index: 2,
             data: [0x90, 60, 100],
+            transport: RtTransportState {
+                is_playing: true,
+                playhead_ppq: 4.0,
+            },
         });
         shared.flush_live_input_to_app();
 
@@ -506,6 +663,8 @@ mod tests {
                 time: 10,
                 port_index: 2,
                 data: [0x90, 60, 100],
+                is_transport_playing: true,
+                playhead_ppq: 4.0,
             })
         );
         assert_eq!(shared.pop_live_input_event(), None);
@@ -518,17 +677,20 @@ mod tests {
             time: 1,
             port_index: 0,
             data: [0x90, 60, 1],
+            transport: default_transport(),
         };
         let newest = RtMidiEvent {
             time: 3,
             port_index: 0,
             data: [0x90, 62, 3],
+            transport: default_transport(),
         };
 
         bridge.push_generated_output(RtMidiEvent {
             time: 2,
             port_index: 0,
             data: [0x90, 61, 2],
+            transport: default_transport(),
         });
         bridge.push_generated_output(newest);
 
@@ -543,6 +705,7 @@ mod tests {
             time: 7,
             port_index: 1,
             data: [0x80, 64, 0],
+            transport: default_transport(),
         };
 
         assert_eq!(
@@ -558,6 +721,10 @@ mod tests {
             time: 42,
             port_index: 1,
             data: [0x92, 65, 127],
+            transport: RtTransportState {
+                is_playing: true,
+                playhead_ppq: 12.0,
+            },
         });
         shared.flush_live_input_to_app();
 
@@ -574,6 +741,8 @@ mod tests {
                 time: 42,
                 port_index: 1,
                 data: [0x92, 65, 127],
+                is_transport_playing: true,
+                playhead_ppq: 12.0,
             })
         );
         assert_eq!(capture.poll_event(), None);
