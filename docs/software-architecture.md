@@ -61,7 +61,7 @@ Local resources:
 |---|---|
 | FR-01/08 | `plugin::clap_adapter`, `app::midi_output_router` |
 | FR-02/06/09 | `ui::window`, `ui::state`, `domain::generation_contract` |
-| FR-03 | `ui::window`, `ui::state`, `infra::midi::loader`, `plugin::live_midi_capture`, `app::midi_input_router` |
+| FR-03 | `ui::window`, `ui::state`, `infra::midi::loader`, `app::input_track_model`, `app::live_midi_capture`, `app::midi_input_router` |
 | FR-04 | `infra::llm::claude_client`, `app::generation_coordinator` |
 | FR-05a〜g | `domain::generation_contract::GenerationMode`, `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state`, `infra::llm::prompt_builder::PromptBuilder` |
 | FR-07 | `ui::window`, `ui::state`, `app::preview_state` |
@@ -216,4 +216,4 @@ UI一貫性ルール:
 - [x] `PromptBuilder` が7モードのテンプレートと参照MIDIイベント列をLLM入力へ反映
 - [x] FR-05要件マトリクスを `domain` / `ui` / `infra::llm::prompt_builder` のユニットテストでカバー
 - [x] 複数 `ReferenceSlot`のUIスロット選択・編集
-- [ ] リアルタイム入力 + チャンネルマッピングUI（FR-03b/03c連携）
+- [x] リアルタイム入力 + チャンネルマッピングUI（FR-03b/03c/03d連携）

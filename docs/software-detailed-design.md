@@ -263,17 +263,40 @@ pub trait LlmGateway {
 - 入力種別ごとの`channel_mappings`を管理
 - 生成時に参照可能な短期バッファ（種別ごと）を保持
 - チャンネルごとの`recording` 設定と DAW transport 状態に応じて、バッファ更新の有効/無効を切り替える
-- 種別バッファはファイル入力と同等の参照情報として `MidiReference::Live` に変換できる形で保持する
+- 種別バッファはファイル入力と同等の参照情報として `MidiReferenceSummary { source: Live }` に変換できる形で保持する
 
 I/F:
 
 ```rust
-pub trait MidiInputRouter {
-    fn update_channel_mapping(&self, mappings: Vec<ChannelMapping>) -> Result<(), AppError>;
-    fn set_recording_channel_enabled(&self, channel: u8, enabled: bool) -> Result<(), AppError>;
+pub struct ChannelMapping {
+    pub slot: ReferenceSlot,
+    pub channel: u8, // 1..=16
+}
+
+pub struct LiveInputEvent {
+    pub time: u32,
+    pub port_index: u16,
+    pub data: [u8; 3],
+}
+
+pub struct MidiInputRouter {
+    // internal state omitted
+}
+
+impl MidiInputRouter {
+    fn update_channel_mapping(
+        &self,
+        mappings: Vec<ChannelMapping>,
+    ) -> Result<(), MidiInputRouterError>;
+    fn set_recording_channel_enabled(
+        &self,
+        channel: u8,
+        enabled: bool,
+    ) -> Result<(), MidiInputRouterError>;
     fn update_transport_state(&self, is_playing: bool, playhead_ppq: f64);
-    fn push_live_event(&self, channel: u8, event: MidiEvent);
-    fn snapshot_reference(&self, kind: LiveInputKind) -> Vec<MidiEvent>;
+    fn push_live_event(&self, channel: u8, event: LiveInputEvent);
+    fn snapshot_reference(&self, slot: ReferenceSlot) -> Vec<LiveInputEvent>;
+    fn reference_metrics(&self, slot: ReferenceSlot) -> LiveReferenceMetrics;
 }
 ```
 
@@ -388,7 +411,7 @@ UI画面状態（4.7対応）:
 4. `live_midi_capture` がDAW入力を受信し `midi_input_router` に渡す
 5. `midi_input_router` は `recording` 有効チャンネルかつ transport `Playing` の間だけ、チャンネルに応じて種別バッファ（小節単位）へ書き込む
 6. 同一小節に新規入力があった場合は当該小節を上書きし、入力がない小節は既存データを保持する
-7. 生成時に種別バッファを `MidiReference::Live` として `GenerationRequest` に詰める（ファイル参照と同様に扱う）
+7. 生成時に種別バッファを `MidiReferenceSummary { source: Live }` として `GenerationRequest.references` に詰める（ファイル参照と同様に扱う）
 8. 以後は通常の生成シーケンス（6.1）で処理
 
 ## 7. 永続化設計
@@ -461,6 +484,7 @@ UI表示ポリシー:
 - リアルタイム入力 + チャンネルマッピングで参照生成されること
 - `Recording` が有効なMIDIチャンネルのみリアルタイム入力バッファが更新されること
 - リアルタイム入力バッファの小節単位上書き（未入力小節保持）が期待通りであること
+- 上記を `tests/fr03b_live_input_reference_flow.rs` で `GenerationRequest.references` 構築まで含めて検証すること
 
 ### 9.3 非機能テスト
 
@@ -491,7 +515,7 @@ UI表示ポリシー:
 - [x] UIでモード別参照要件を表示し、未達時の生成をブロック
 - [x] FR-05要件マトリクスを `domain` / `ui` / `infra::llm` のテストで検証
 - [x] UIで複数 `ReferenceSlot`（Melody以外）を個別に設定可能にする
-- [ ] リアルタイム入力のモード別スロット設定とチャンネルマッピングUIを接続
+- [x] リアルタイム入力のモード別スロット設定とチャンネルマッピングUIを接続（FR-03b/03c/03d）
 
 ## 11. 決定事項（2026-02-16）
 
