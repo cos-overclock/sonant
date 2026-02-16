@@ -7,7 +7,7 @@ use crate::domain::{ReferenceSlot, ReferenceSource};
 pub const MIDI_CHANNEL_MIN: u8 = 1;
 pub const MIDI_CHANNEL_MAX: u8 = 16;
 
-const REFERENCE_SLOT_COUNT: usize = 7;
+const REFERENCE_SLOT_COUNT: usize = std::mem::variant_count::<ReferenceSlot>();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelMapping {
