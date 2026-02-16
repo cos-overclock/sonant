@@ -277,35 +277,52 @@ mod tests {
     }
 
     #[test]
-    fn mode_reference_requirement_labels_key_modes() {
-        let counter = mode_reference_requirement(GenerationMode::CounterMelody);
-        assert_eq!(counter.description, "Reference MIDI required: Melody.");
-        assert_eq!(
-            counter.unmet_message,
-            Some("Counter Melody mode requires a Melody reference MIDI before generating.")
-        );
+    fn mode_reference_requirement_labels_cover_all_modes() {
+        let cases = [
+            (GenerationMode::Melody, "Reference MIDI: Optional.", None),
+            (
+                GenerationMode::ChordProgression,
+                "Reference MIDI: Optional.",
+                None,
+            ),
+            (
+                GenerationMode::DrumPattern,
+                "Reference MIDI: Optional.",
+                None,
+            ),
+            (GenerationMode::Bassline, "Reference MIDI: Optional.", None),
+            (
+                GenerationMode::CounterMelody,
+                "Reference MIDI required: Melody.",
+                Some("Counter Melody mode requires a Melody reference MIDI before generating."),
+            ),
+            (
+                GenerationMode::Harmony,
+                "Reference MIDI required: Melody.",
+                Some("Harmony mode requires a Melody reference MIDI before generating."),
+            ),
+            (
+                GenerationMode::Continuation,
+                "Reference MIDI required: At least one slot.",
+                Some("Continuation mode requires at least one reference MIDI before generating."),
+            ),
+        ];
 
-        let continuation = mode_reference_requirement(GenerationMode::Continuation);
-        assert_eq!(
-            continuation.description,
-            "Reference MIDI required: At least one slot."
-        );
-        assert_eq!(
-            continuation.unmet_message,
-            Some("Continuation mode requires at least one reference MIDI before generating.")
-        );
-
-        let melody = mode_reference_requirement(GenerationMode::Melody);
-        assert_eq!(melody.description, "Reference MIDI: Optional.");
-        assert_eq!(melody.unmet_message, None);
-
-        let bassline = mode_reference_requirement(GenerationMode::Bassline);
-        assert_eq!(bassline.description, "Reference MIDI: Optional.");
-        assert_eq!(bassline.unmet_message, None);
+        for (mode, expected_description, expected_unmet_message) in cases {
+            let requirement = mode_reference_requirement(mode);
+            assert_eq!(
+                requirement.description, expected_description,
+                "unexpected requirement description for {mode:?}"
+            );
+            assert_eq!(
+                requirement.unmet_message, expected_unmet_message,
+                "unexpected requirement unmet message for {mode:?}"
+            );
+        }
     }
 
     #[test]
-    fn mode_reference_requirement_satisfied_matches_mode_rules() {
+    fn mode_reference_requirement_satisfied_covers_mode_pass_and_fail_matrix() {
         let no_references = Vec::<MidiReferenceSummary>::new();
         let melody_reference = vec![test_reference("/tmp/melody.mid")];
         let chord_reference = vec![test_reference_with_slot(
@@ -313,46 +330,30 @@ mod tests {
             ReferenceSlot::ChordProgression,
         )];
 
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::Melody,
-            &no_references
-        ));
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::ChordProgression,
-            &no_references
-        ));
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::DrumPattern,
-            &no_references
-        ));
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::Bassline,
-            &no_references
-        ));
-        assert!(!mode_reference_requirement_satisfied(
-            GenerationMode::CounterMelody,
-            &no_references
-        ));
-        assert!(!mode_reference_requirement_satisfied(
-            GenerationMode::Continuation,
-            &no_references
-        ));
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::CounterMelody,
-            &melody_reference
-        ));
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::Continuation,
-            &melody_reference
-        ));
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::Bassline,
-            &melody_reference
-        ));
-        assert!(mode_reference_requirement_satisfied(
-            GenerationMode::Bassline,
-            &chord_reference
-        ));
+        let cases = [
+            (GenerationMode::Melody, &no_references, true),
+            (GenerationMode::ChordProgression, &no_references, true),
+            (GenerationMode::DrumPattern, &no_references, true),
+            (GenerationMode::Bassline, &no_references, true),
+            (GenerationMode::CounterMelody, &no_references, false),
+            (GenerationMode::Harmony, &no_references, false),
+            (GenerationMode::Continuation, &no_references, false),
+            (GenerationMode::CounterMelody, &chord_reference, false),
+            (GenerationMode::Harmony, &chord_reference, false),
+            (GenerationMode::CounterMelody, &melody_reference, true),
+            (GenerationMode::Harmony, &melody_reference, true),
+            (GenerationMode::Continuation, &melody_reference, true),
+            (GenerationMode::Bassline, &melody_reference, true),
+            (GenerationMode::Bassline, &chord_reference, true),
+        ];
+
+        for (mode, references, expected) in cases {
+            let actual = mode_reference_requirement_satisfied(mode, references);
+            assert_eq!(
+                actual, expected,
+                "unexpected requirement result for {mode:?} with references {references:?}"
+            );
+        }
     }
 
     #[test]

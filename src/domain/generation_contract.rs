@@ -556,103 +556,82 @@ mod tests {
     }
 
     #[test]
-    fn request_validation_requires_reference_in_continuation_mode() {
-        let request = valid_request(GenerationMode::Continuation, Vec::new());
-
-        assert!(matches!(
-            request.validate(),
-            Err(LlmError::Validation { message })
-            if message == "continuation mode requires at least one MIDI reference"
-        ));
-    }
-
-    #[test]
-    fn request_validation_allows_modes_without_references_when_optional() {
-        let modes = [
-            GenerationMode::Melody,
-            GenerationMode::ChordProgression,
-            GenerationMode::DrumPattern,
-            GenerationMode::Bassline,
+    fn request_validation_mode_reference_requirements_cover_pass_and_fail_matrix() {
+        let cases = [
+            (GenerationMode::Melody, Vec::new(), None),
+            (GenerationMode::ChordProgression, Vec::new(), None),
+            (GenerationMode::DrumPattern, Vec::new(), None),
+            (GenerationMode::Bassline, Vec::new(), None),
+            (
+                GenerationMode::Bassline,
+                vec![sample_reference(ReferenceSlot::Melody)],
+                None,
+            ),
+            (
+                GenerationMode::Bassline,
+                vec![sample_reference(ReferenceSlot::ChordProgression)],
+                None,
+            ),
+            (
+                GenerationMode::CounterMelody,
+                Vec::new(),
+                Some("counter melody mode requires at least one melody MIDI reference"),
+            ),
+            (
+                GenerationMode::CounterMelody,
+                vec![sample_reference(ReferenceSlot::ChordProgression)],
+                Some("counter melody mode requires at least one melody MIDI reference"),
+            ),
+            (
+                GenerationMode::CounterMelody,
+                vec![sample_reference(ReferenceSlot::Melody)],
+                None,
+            ),
+            (
+                GenerationMode::Harmony,
+                Vec::new(),
+                Some("harmony mode requires at least one melody MIDI reference"),
+            ),
+            (
+                GenerationMode::Harmony,
+                vec![sample_reference(ReferenceSlot::DrumPattern)],
+                Some("harmony mode requires at least one melody MIDI reference"),
+            ),
+            (
+                GenerationMode::Harmony,
+                vec![sample_reference(ReferenceSlot::Melody)],
+                None,
+            ),
+            (
+                GenerationMode::Continuation,
+                Vec::new(),
+                Some("continuation mode requires at least one MIDI reference"),
+            ),
+            (
+                GenerationMode::Continuation,
+                vec![sample_reference(ReferenceSlot::Melody)],
+                None,
+            ),
         ];
 
-        for mode in modes {
-            let request = valid_request(mode, Vec::new());
-            assert!(
-                request.validate().is_ok(),
-                "mode {mode:?} should allow request without references"
-            );
+        for (mode, references, expected_error) in cases {
+            let request = valid_request(mode, references);
+            match expected_error {
+                Some(message) => assert!(
+                    matches!(
+                        request.validate(),
+                        Err(LlmError::Validation {
+                            message: actual_message
+                        }) if actual_message == message
+                    ),
+                    "mode {mode:?} should fail with '{message}'",
+                ),
+                None => assert!(
+                    request.validate().is_ok(),
+                    "mode {mode:?} should pass reference validation"
+                ),
+            }
         }
-    }
-
-    #[test]
-    fn request_validation_allows_bassline_mode_with_melody_or_chord_references() {
-        let request_with_melody_reference = valid_request(
-            GenerationMode::Bassline,
-            vec![sample_reference(ReferenceSlot::Melody)],
-        );
-        assert!(request_with_melody_reference.validate().is_ok());
-
-        let request_with_chord_reference = valid_request(
-            GenerationMode::Bassline,
-            vec![sample_reference(ReferenceSlot::ChordProgression)],
-        );
-        assert!(request_with_chord_reference.validate().is_ok());
-    }
-
-    #[test]
-    fn request_validation_requires_melody_reference_for_counter_melody_mode() {
-        let request_without_reference = valid_request(GenerationMode::CounterMelody, Vec::new());
-
-        assert!(matches!(
-            request_without_reference.validate(),
-            Err(LlmError::Validation { message })
-            if message == "counter melody mode requires at least one melody MIDI reference"
-        ));
-
-        let request_with_non_melody_reference = valid_request(
-            GenerationMode::CounterMelody,
-            vec![sample_reference(ReferenceSlot::ChordProgression)],
-        );
-
-        assert!(matches!(
-            request_with_non_melody_reference.validate(),
-            Err(LlmError::Validation { message })
-            if message == "counter melody mode requires at least one melody MIDI reference"
-        ));
-
-        let request_with_melody_reference = valid_request(
-            GenerationMode::CounterMelody,
-            vec![sample_reference(ReferenceSlot::Melody)],
-        );
-        assert!(request_with_melody_reference.validate().is_ok());
-    }
-
-    #[test]
-    fn request_validation_requires_melody_reference_for_harmony_mode() {
-        let request_without_reference = valid_request(GenerationMode::Harmony, Vec::new());
-
-        assert!(matches!(
-            request_without_reference.validate(),
-            Err(LlmError::Validation { message })
-            if message == "harmony mode requires at least one melody MIDI reference"
-        ));
-
-        let request_with_non_melody_reference = valid_request(
-            GenerationMode::Harmony,
-            vec![sample_reference(ReferenceSlot::DrumPattern)],
-        );
-
-        assert!(matches!(
-            request_with_non_melody_reference.validate(),
-            Err(LlmError::Validation { message })
-            if message == "harmony mode requires at least one melody MIDI reference"
-        ));
-
-        let request_with_melody_reference = valid_request(
-            GenerationMode::Harmony,
-            vec![sample_reference(ReferenceSlot::Melody)],
-        );
-        assert!(request_with_melody_reference.validate().is_ok());
     }
 
     #[test]
