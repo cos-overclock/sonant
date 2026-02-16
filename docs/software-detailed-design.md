@@ -469,7 +469,7 @@ UI表示ポリシー:
 - [x] `PromptBuilder` で `MidiReferenceSummary.events` をLLM入力へ注入
 - [x] UIでモード別参照要件を表示し、未達時の生成をブロック
 - [x] FR-05要件マトリクスを `domain` / `ui` / `infra::llm` のテストで検証
-- [ ] UIで複数 `ReferenceSlot`（Melody以外）を個別に設定可能にする
+- [x] UIで複数 `ReferenceSlot`（Melody以外）を個別に設定可能にする
 - [ ] リアルタイム入力のモード別スロット設定とチャンネルマッピングUIを接続
 
 ## 11. 決定事項（2026-02-16）

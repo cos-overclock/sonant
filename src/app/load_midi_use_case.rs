@@ -377,6 +377,72 @@ mod tests {
     }
 
     #[test]
+    fn multiple_slots_can_be_loaded_and_cleared_independently() {
+        let melody_path = temp_test_path("melody.mid");
+        let chord_path = temp_test_path("chords.mid");
+
+        let loader = Arc::new(StubLoader::new(vec![
+            Ok(sample_reference_data(4, 16, 60, 72, "melody")),
+            Ok(sample_reference_data(4, 12, 48, 67, "chords")),
+        ]));
+        let use_case = LoadMidiUseCase::with_loader(loader.clone());
+
+        use_case
+            .execute(LoadMidiCommand::SetFile {
+                slot: ReferenceSlot::Melody,
+                path: melody_path.to_string_lossy().to_string(),
+            })
+            .expect("melody slot load should succeed");
+        use_case
+            .execute(LoadMidiCommand::SetFile {
+                slot: ReferenceSlot::ChordProgression,
+                path: chord_path.to_string_lossy().to_string(),
+            })
+            .expect("chord slot load should succeed");
+
+        let before_clear = use_case.snapshot_references();
+        assert_eq!(before_clear.len(), 2);
+        assert!(
+            before_clear
+                .iter()
+                .any(|reference| reference.slot == ReferenceSlot::Melody)
+        );
+        assert!(
+            before_clear
+                .iter()
+                .any(|reference| reference.slot == ReferenceSlot::ChordProgression)
+        );
+
+        let clear_outcome = use_case
+            .execute(LoadMidiCommand::ClearSlot {
+                slot: ReferenceSlot::Melody,
+            })
+            .expect("clear should succeed");
+        assert_eq!(
+            clear_outcome,
+            LoadMidiOutcome::Cleared {
+                slot: ReferenceSlot::Melody,
+                had_reference: true,
+            }
+        );
+
+        assert!(use_case.slot_reference(ReferenceSlot::Melody).is_none());
+        let chord_reference = use_case
+            .slot_reference(ReferenceSlot::ChordProgression)
+            .expect("chord slot must remain after clearing melody slot");
+        assert_eq!(
+            chord_reference
+                .file
+                .expect("file metadata must exist for chord slot")
+                .path,
+            chord_path.to_string_lossy()
+        );
+        assert_eq!(use_case.snapshot_references().len(), 1);
+
+        assert_eq!(loader.seen_paths(), vec![melody_path, chord_path]);
+    }
+
+    #[test]
     fn load_error_is_propagated_and_existing_slot_is_kept() {
         let current_path = temp_test_path("current.mid");
         let broken_path = temp_test_path("broken.mid");

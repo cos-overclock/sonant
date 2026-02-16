@@ -47,10 +47,11 @@ pub(super) struct SonantMainWindow {
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
     selected_generation_mode: GenerationMode,
+    selected_reference_slot: ReferenceSlot,
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     api_key_error: Option<String>,
-    midi_slot_error: Option<MidiSlotErrorState>,
+    midi_slot_errors: Vec<MidiSlotErrorState>,
     active_test_api_key: Option<String>,
     startup_notice: Option<String>,
     _update_poll_task: Task<()>,
@@ -86,10 +87,11 @@ impl SonantMainWindow {
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
             selected_generation_mode: GenerationMode::Melody,
+            selected_reference_slot: ReferenceSlot::Melody,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             api_key_error: None,
-            midi_slot_error: None,
+            midi_slot_errors: Vec::new(),
             active_test_api_key: None,
             startup_notice: backend.startup_notice,
             _update_poll_task: Task::ready(()),
@@ -174,7 +176,10 @@ impl SonantMainWindow {
             self.generation_status = HelperGenerationStatus::Failed {
                 message: error.user_message(),
             };
-            self.midi_slot_error = Some(MidiSlotErrorState::non_retryable(error.user_message()));
+            self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
+                self.selected_reference_slot,
+                error.user_message(),
+            ));
             cx.notify();
             return;
         }
@@ -215,6 +220,73 @@ impl SonantMainWindow {
         }
     }
 
+    fn reference_slots() -> &'static [ReferenceSlot] {
+        const SLOTS: [ReferenceSlot; 7] = [
+            ReferenceSlot::Melody,
+            ReferenceSlot::ChordProgression,
+            ReferenceSlot::DrumPattern,
+            ReferenceSlot::Bassline,
+            ReferenceSlot::CounterMelody,
+            ReferenceSlot::Harmony,
+            ReferenceSlot::ContinuationSeed,
+        ];
+        &SLOTS
+    }
+
+    fn reference_slot_label(slot: ReferenceSlot) -> &'static str {
+        match slot {
+            ReferenceSlot::Melody => "Melody",
+            ReferenceSlot::ChordProgression => "Chord Progression",
+            ReferenceSlot::DrumPattern => "Drum Pattern",
+            ReferenceSlot::Bassline => "Bassline",
+            ReferenceSlot::CounterMelody => "Counter Melody",
+            ReferenceSlot::Harmony => "Harmony",
+            ReferenceSlot::ContinuationSeed => "Continuation Seed",
+        }
+    }
+
+    fn reference_slot_button_id(slot: ReferenceSlot) -> &'static str {
+        match slot {
+            ReferenceSlot::Melody => "reference-slot-melody",
+            ReferenceSlot::ChordProgression => "reference-slot-chord-progression",
+            ReferenceSlot::DrumPattern => "reference-slot-drum-pattern",
+            ReferenceSlot::Bassline => "reference-slot-bassline",
+            ReferenceSlot::CounterMelody => "reference-slot-counter-melody",
+            ReferenceSlot::Harmony => "reference-slot-harmony",
+            ReferenceSlot::ContinuationSeed => "reference-slot-continuation-seed",
+        }
+    }
+
+    fn on_reference_slot_selected(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
+        if self.selected_reference_slot != slot {
+            self.selected_reference_slot = slot;
+            cx.notify();
+        }
+    }
+
+    fn upsert_midi_slot_error(&mut self, error: MidiSlotErrorState) {
+        if let Some(existing) = self
+            .midi_slot_errors
+            .iter_mut()
+            .find(|existing| existing.slot == error.slot)
+        {
+            *existing = error;
+        } else {
+            self.midi_slot_errors.push(error);
+        }
+    }
+
+    fn clear_midi_slot_error(&mut self, slot: ReferenceSlot) {
+        self.midi_slot_errors
+            .retain(|existing| existing.slot != slot);
+    }
+
+    fn midi_slot_error_for_slot(&self, slot: ReferenceSlot) -> Option<&MidiSlotErrorState> {
+        self.midi_slot_errors
+            .iter()
+            .find(|error| error.slot == slot)
+    }
+
     fn start_update_polling(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self._update_poll_task = cx.spawn_in(window, async move |view, window| {
             loop {
@@ -252,8 +324,10 @@ impl SonantMainWindow {
                 Ok(Some(paths)) => {
                     if let Some(path) = paths.into_iter().next() {
                         let _ = view.update_in(window, |view, _window, cx| {
+                            let slot = view.selected_reference_slot;
                             if !has_supported_midi_extension(&path) {
-                                view.midi_slot_error = Some(MidiSlotErrorState::non_retryable(
+                                view.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
+                                    slot,
                                     MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
                                 ));
                                 cx.notify();
@@ -261,7 +335,7 @@ impl SonantMainWindow {
                             }
 
                             let path = path.to_string_lossy().to_string();
-                            view.set_midi_slot_file(path, cx);
+                            view.set_midi_slot_file(slot, path, cx);
                         });
                     }
                 }
@@ -269,7 +343,10 @@ impl SonantMainWindow {
                 Err(error) => {
                     let message = format!("Could not open the file dialog: {error}");
                     let _ = view.update_in(window, |view, _window, cx| {
-                        view.midi_slot_error = Some(MidiSlotErrorState::non_retryable(message));
+                        let slot = view.selected_reference_slot;
+                        view.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
+                            slot, message,
+                        ));
                         cx.notify();
                     });
                 }
@@ -278,50 +355,57 @@ impl SonantMainWindow {
     }
 
     fn on_midi_slot_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        let slot = self.selected_reference_slot;
         let Some(path) = dropped_path_to_load(paths) else {
-            self.midi_slot_error = Some(MidiSlotErrorState::non_retryable(
+            self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
+                slot,
                 MIDI_SLOT_DROP_ERROR_MESSAGE,
             ));
             cx.notify();
             return;
         };
 
-        self.set_midi_slot_file(path, cx);
+        self.set_midi_slot_file(slot, path, cx);
     }
 
-    fn set_midi_slot_file(&mut self, path: String, cx: &mut Context<Self>) {
-        self.midi_slot_error = None;
+    fn set_midi_slot_file(&mut self, slot: ReferenceSlot, path: String, cx: &mut Context<Self>) {
+        self.clear_midi_slot_error(slot);
         match self.load_midi_use_case.execute(LoadMidiCommand::SetFile {
-            slot: ReferenceSlot::Melody,
+            slot,
             path: path.clone(),
         }) {
             Ok(_) => cx.notify(),
             Err(error) => {
-                self.midi_slot_error = Some(MidiSlotErrorState::from_load_error(&path, &error));
+                self.upsert_midi_slot_error(MidiSlotErrorState::from_load_error(
+                    slot, &path, &error,
+                ));
                 cx.notify();
             }
         }
     }
 
-    fn on_retry_midi_slot_clicked(&mut self, cx: &mut Context<Self>) {
+    fn on_retry_midi_slot_clicked(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
         let retry_path = self
-            .midi_slot_error
-            .as_ref()
+            .midi_slot_error_for_slot(slot)
             .and_then(|error| error.retry_path.clone());
         if let Some(path) = retry_path {
-            self.set_midi_slot_file(path, cx);
+            self.set_midi_slot_file(slot, path, cx);
         }
     }
 
     fn on_clear_midi_slot_clicked(&mut self, cx: &mut Context<Self>) {
-        self.midi_slot_error = None;
-        match self.load_midi_use_case.execute(LoadMidiCommand::ClearSlot {
-            slot: ReferenceSlot::Melody,
-        }) {
+        let slot = self.selected_reference_slot;
+        self.clear_midi_slot_error(slot);
+        match self
+            .load_midi_use_case
+            .execute(LoadMidiCommand::ClearSlot { slot })
+        {
             Ok(_) => cx.notify(),
             Err(error) => {
-                self.midi_slot_error =
-                    Some(MidiSlotErrorState::non_retryable(error.user_message()));
+                self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
+                    slot,
+                    error.user_message(),
+                ));
                 cx.notify();
             }
         }
@@ -407,25 +491,30 @@ impl Render for SonantMainWindow {
         let status_color = self.generation_status.color();
         let generating = self.generation_status.is_submitting_or_running();
         let selected_mode_label = Self::generation_mode_label(self.selected_generation_mode);
+        let selected_reference_slot_label =
+            Self::reference_slot_label(self.selected_reference_slot);
         let references = self.load_midi_use_case.snapshot_references();
         let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
         let mode_requirement_satisfied =
             mode_reference_requirement_satisfied(self.selected_generation_mode, &references);
-        let melody_reference = self
-            .load_midi_use_case
-            .slot_reference(ReferenceSlot::Melody);
-        let melody_file_path = melody_reference
+        let selected_slot_reference = references
+            .iter()
+            .find(|reference| reference.slot == self.selected_reference_slot);
+        let selected_slot_file_path = selected_slot_reference
             .as_ref()
             .and_then(|reference| reference.file.as_ref())
             .map(|file| file.path.clone());
-        let melody_file_label = melody_file_path
+        let selected_slot_file_label = selected_slot_file_path
             .as_deref()
             .map(display_file_name_from_path)
             .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
-        let melody_slot_stats = melody_reference
+        let selected_slot_stats = selected_slot_reference
             .as_ref()
             .map(|reference| format!("Bars: {} / Notes: {}", reference.bars, reference.note_count));
-        let melody_slot_set = melody_reference.is_some();
+        let selected_slot_set = selected_slot_reference.is_some();
+        let selected_slot_error = self
+            .midi_slot_error_for_slot(self.selected_reference_slot)
+            .cloned();
         let mode_button = |id: &'static str, mode: GenerationMode| {
             let button = Button::new(id)
                 .label(Self::generation_mode_label(mode))
@@ -433,6 +522,18 @@ impl Render for SonantMainWindow {
                     this.on_generation_mode_selected(mode, cx)
                 }));
             if self.selected_generation_mode == mode {
+                button.primary()
+            } else {
+                button
+            }
+        };
+        let slot_button = |slot: ReferenceSlot| {
+            let button = Button::new(Self::reference_slot_button_id(slot))
+                .label(Self::reference_slot_label(slot))
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    this.on_reference_slot_selected(slot, cx)
+                }));
+            if self.selected_reference_slot == slot {
                 button.primary()
             } else {
                 button
@@ -449,7 +550,7 @@ impl Render for SonantMainWindow {
             .text_color(rgb(0xf9fafb))
             .child(Label::new("Sonant GPUI Helper"))
             .child(Label::new(
-                "FR-02/03a: Prompt input and reference MIDI file slot wired to app use cases.",
+                "FR-05: Prompt input and multi-slot reference MIDI editing are wired to app use cases.",
             ))
             .child(Label::new("API Key (testing)"))
             .child(Input::new(&self.api_key_input).mask_toggle())
@@ -543,10 +644,97 @@ impl Render for SonantMainWindow {
                             )),
                     ),
             )
-            .child(Label::new("Reference MIDI (Melody Slot)"))
+            .child(Label::new("Reference Slot"))
             .child(
                 div()
-                    .id("midi-slot-melody")
+                    .id("reference-slot-selector")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .border_1()
+                    .border_color(rgb(0x334155))
+                    .bg(rgb(0x0f172a))
+                    .child(
+                        div()
+                            .text_color(rgb(0x93c5fd))
+                            .child(format!("Selected: {selected_reference_slot_label}")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(slot_button(ReferenceSlot::Melody))
+                            .child(slot_button(ReferenceSlot::ChordProgression))
+                            .child(slot_button(ReferenceSlot::DrumPattern))
+                            .child(slot_button(ReferenceSlot::Bassline)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(slot_button(ReferenceSlot::CounterMelody))
+                            .child(slot_button(ReferenceSlot::Harmony))
+                            .child(slot_button(ReferenceSlot::ContinuationSeed)),
+                    ),
+            )
+            .child(Label::new("Reference Slot Overview"))
+            .child(
+                div()
+                    .id("reference-slot-overview")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(Self::reference_slots().iter().copied().map(|slot| {
+                        let reference = references.iter().find(|reference| reference.slot == slot);
+                        let slot_file_path = reference
+                            .and_then(|reference| reference.file.as_ref())
+                            .map(|file| file.path.clone());
+                        let slot_file_label = slot_file_path
+                            .as_deref()
+                            .map(display_file_name_from_path)
+                            .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
+                        let slot_stats = reference.map(|reference| {
+                            format!("Bars: {} / Notes: {}", reference.bars, reference.note_count)
+                        });
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .p_2()
+                            .border_1()
+                            .border_color(if slot == self.selected_reference_slot {
+                                rgb(0x67e8f9)
+                            } else {
+                                rgb(0x334155)
+                            })
+                            .bg(if slot == self.selected_reference_slot {
+                                rgb(0x082f49)
+                            } else {
+                                rgb(0x0f172a)
+                            })
+                            .child(div().text_color(rgb(0x93c5fd)).child(Self::reference_slot_label(slot)))
+                            .child(div().child(format!("File: {slot_file_label}")))
+                            .children(
+                                slot_stats
+                                    .iter()
+                                    .map(|stats| div().text_color(rgb(0x93c5fd)).child(stats.clone())),
+                            )
+                            .children(
+                                slot_file_path
+                                    .iter()
+                                    .map(|path| div().text_color(rgb(0x94a3b8)).child(path.clone())),
+                            )
+                    })),
+            )
+            .child(Label::new(format!(
+                "Reference MIDI ({selected_reference_slot_label} Slot)"
+            )))
+            .child(
+                div()
+                    .id("midi-slot-selected")
                     .flex()
                     .flex_col()
                     .gap_2()
@@ -569,15 +757,17 @@ impl Render for SonantMainWindow {
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
                         this.on_midi_slot_drop(paths, cx)
                     }))
-                    .child(div().child(MIDI_SLOT_DROP_HINT))
-                    .child(div().child(format!("File: {melody_file_label}")))
+                    .child(div().child(format!(
+                        "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label}."
+                    )))
+                    .child(div().child(format!("File: {selected_slot_file_label}")))
                     .children(
-                        melody_slot_stats
+                        selected_slot_stats
                             .iter()
                             .map(|stats| div().text_color(rgb(0x93c5fd)).child(stats.clone())),
                     )
                     .children(
-                        melody_file_path
+                        selected_slot_file_path
                             .iter()
                             .map(|path| div().text_color(rgb(0x94a3b8)).child(path.clone())),
                     )
@@ -596,14 +786,16 @@ impl Render for SonantMainWindow {
                             .child(
                                 Button::new("midi-slot-clear-button")
                                     .label("Clear")
-                                    .disabled(!melody_slot_set)
+                                    .disabled(!selected_slot_set)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.on_clear_midi_slot_clicked(cx)
                                     })),
                             ),
                     ),
             )
-            .children(self.midi_slot_error.iter().map(|error| {
+            .children(selected_slot_error.into_iter().map(|error| {
+                let slot_label = Self::reference_slot_label(error.slot);
+                let retry_slot = error.slot;
                 div()
                     .flex()
                     .flex_col()
@@ -611,7 +803,7 @@ impl Render for SonantMainWindow {
                     .child(
                         div()
                             .text_color(rgb(0xfca5a5))
-                            .child(format!("Reference MIDI: {}", error.message)),
+                            .child(format!("Reference MIDI ({slot_label}): {}", error.message)),
                     )
                     .child(
                         div()
@@ -622,8 +814,8 @@ impl Render for SonantMainWindow {
                                 Button::new("midi-slot-retry-button")
                                     .label("Retry")
                                     .disabled(!error.can_retry())
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.on_retry_midi_slot_clicked(cx)
+                                    .on_click(cx.listener(move |this, _, _window, cx| {
+                                        this.on_retry_midi_slot_clicked(retry_slot, cx)
                                     })),
                             )
                             .child(
