@@ -1035,6 +1035,22 @@ mod tests {
     }
 
     #[test]
+    fn dropped_path_selection_falls_back_to_first_when_no_midi_found() {
+        let selected = choose_dropped_midi_path(&[
+            PathBuf::from("/tmp/data.txt"),
+            PathBuf::from("/tmp/other.wav"),
+        ])
+        .expect("a candidate path should be selected");
+        assert_eq!(selected, PathBuf::from("/tmp/data.txt"));
+    }
+
+    #[test]
+    fn dropped_path_selection_returns_none_for_empty_input() {
+        let selected = choose_dropped_midi_path(&[]);
+        assert!(selected.is_none());
+    }
+
+    #[test]
     fn display_file_name_falls_back_when_no_name_exists() {
         assert_eq!(display_file_name_from_path("/tmp/melody.mid"), "melody.mid");
         assert_eq!(display_file_name_from_path("melody.mid"), "melody.mid");
