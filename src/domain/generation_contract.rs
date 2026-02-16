@@ -540,6 +540,120 @@ mod tests {
     }
 
     #[test]
+    fn reference_validation_rejects_empty_file_path() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "   ".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(matches!(
+            reference.validate(),
+            Err(LlmError::Validation { .. })
+        ));
+    }
+
+    #[test]
+    fn reference_validation_rejects_file_path_without_extension() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(matches!(
+            reference.validate(),
+            Err(LlmError::Validation { .. })
+        ));
+    }
+
+    #[test]
+    fn reference_validation_accepts_lowercase_mid_extension() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.mid".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(reference.validate().is_ok());
+    }
+
+    #[test]
+    fn reference_validation_accepts_lowercase_midi_extension() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.midi".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(reference.validate().is_ok());
+    }
+
+    #[test]
+    fn reference_validation_accepts_uppercase_mid_extension() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.MID".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(reference.validate().is_ok());
+    }
+
+    #[test]
+    fn reference_validation_accepts_mixed_case_midi_extension() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.Midi".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(reference.validate().is_ok());
+    }
+
+    #[test]
     fn result_validation_rejects_empty_provider_request_id_metadata() {
         let result = GenerationResult {
             request_id: "req-1".to_string(),
