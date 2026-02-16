@@ -16,13 +16,16 @@ use gpui_component::{
 use sonant::{
     app::{
         GenerationJobManager, GenerationJobState, GenerationJobUpdate, GenerationService,
-        LoadMidiCommand, LoadMidiUseCase,
+        LoadMidiCommand, LoadMidiError, LoadMidiUseCase,
     },
     domain::{
         GenerationMode, GenerationParams, GenerationRequest, GenerationResult, LlmError,
         MidiReferenceSummary, ModelRef, ReferenceSlot, has_supported_midi_extension,
     },
-    infra::llm::{AnthropicProvider, LlmProvider, OpenAiCompatibleProvider, ProviderRegistry},
+    infra::{
+        llm::{AnthropicProvider, LlmProvider, OpenAiCompatibleProvider, ProviderRegistry},
+        midi::MidiLoadError,
+    },
 };
 
 #[cfg(target_os = "macos")]
@@ -139,7 +142,7 @@ struct SonantMainWindow {
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     api_key_error: Option<String>,
-    midi_slot_error: Option<String>,
+    midi_slot_error: Option<MidiSlotErrorState>,
     active_test_api_key: Option<String>,
     startup_notice: Option<String>,
     _update_poll_task: Task<()>,
@@ -250,7 +253,7 @@ impl SonantMainWindow {
             self.generation_status = HelperGenerationStatus::Failed {
                 message: error.user_message(),
             };
-            self.midi_slot_error = Some(error.user_message());
+            self.midi_slot_error = Some(MidiSlotErrorState::non_retryable(error.user_message()));
             cx.notify();
             return;
         }
@@ -310,8 +313,9 @@ impl SonantMainWindow {
                     if let Some(path) = paths.into_iter().next() {
                         let _ = view.update_in(window, |view, _window, cx| {
                             if !has_supported_midi_extension(&path) {
-                                view.midi_slot_error =
-                                    Some(MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE.to_string());
+                                view.midi_slot_error = Some(MidiSlotErrorState::non_retryable(
+                                    MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
+                                ));
                                 cx.notify();
                                 return;
                             }
@@ -325,7 +329,7 @@ impl SonantMainWindow {
                 Err(error) => {
                     let message = format!("Could not open the file dialog: {error}");
                     let _ = view.update_in(window, |view, _window, cx| {
-                        view.midi_slot_error = Some(message);
+                        view.midi_slot_error = Some(MidiSlotErrorState::non_retryable(message));
                         cx.notify();
                     });
                 }
@@ -335,7 +339,9 @@ impl SonantMainWindow {
 
     fn on_midi_slot_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
         let Some(path) = dropped_path_to_load(paths) else {
-            self.midi_slot_error = Some(MIDI_SLOT_DROP_ERROR_MESSAGE.to_string());
+            self.midi_slot_error = Some(MidiSlotErrorState::non_retryable(
+                MIDI_SLOT_DROP_ERROR_MESSAGE,
+            ));
             cx.notify();
             return;
         };
@@ -347,13 +353,23 @@ impl SonantMainWindow {
         self.midi_slot_error = None;
         match self.load_midi_use_case.execute(LoadMidiCommand::SetFile {
             slot: ReferenceSlot::Melody,
-            path,
+            path: path.clone(),
         }) {
             Ok(_) => cx.notify(),
             Err(error) => {
-                self.midi_slot_error = Some(error.user_message());
+                self.midi_slot_error = Some(MidiSlotErrorState::from_load_error(&path, &error));
                 cx.notify();
             }
+        }
+    }
+
+    fn on_retry_midi_slot_clicked(&mut self, cx: &mut Context<Self>) {
+        let retry_path = self
+            .midi_slot_error
+            .as_ref()
+            .and_then(|error| error.retry_path.clone());
+        if let Some(path) = retry_path {
+            self.set_midi_slot_file(path, cx);
         }
     }
 
@@ -364,7 +380,8 @@ impl SonantMainWindow {
         }) {
             Ok(_) => cx.notify(),
             Err(error) => {
-                self.midi_slot_error = Some(error.user_message());
+                self.midi_slot_error =
+                    Some(MidiSlotErrorState::non_retryable(error.user_message()));
                 cx.notify();
             }
         }
@@ -544,10 +561,37 @@ impl Render for SonantMainWindow {
                             ),
                     ),
             )
-            .children(self.midi_slot_error.iter().map(|message| {
+            .children(self.midi_slot_error.iter().map(|error| {
                 div()
-                    .text_color(rgb(0xfca5a5))
-                    .child(format!("Reference MIDI: {message}"))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_color(rgb(0xfca5a5))
+                            .child(format!("Reference MIDI: {}", error.message)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("midi-slot-retry-button")
+                                    .label("Retry")
+                                    .disabled(!error.can_retry())
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.on_retry_midi_slot_clicked(cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("midi-slot-reselect-button")
+                                    .label("Choose Another File")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.on_select_midi_file_clicked(window, cx)
+                                    })),
+                            ),
+                    )
             }))
             .child(Label::new("Prompt"))
             .child(Input::new(&self.prompt_input).h(px(PROMPT_EDITOR_HEIGHT_PX)))
@@ -605,6 +649,42 @@ enum HelperGenerationStatus {
     Cancelled {
         request_id: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MidiSlotErrorState {
+    message: String,
+    retry_path: Option<String>,
+}
+
+impl MidiSlotErrorState {
+    fn non_retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retry_path: None,
+        }
+    }
+
+    fn from_load_error(path: &str, error: &LoadMidiError) -> Self {
+        let retry_path = can_retry_midi_load_error(error).then(|| path.to_string());
+        Self {
+            message: error.user_message(),
+            retry_path,
+        }
+    }
+
+    fn can_retry(&self) -> bool {
+        self.retry_path.is_some()
+    }
+}
+
+fn can_retry_midi_load_error(error: &LoadMidiError) -> bool {
+    matches!(
+        error,
+        LoadMidiError::LoadFailed {
+            source: MidiLoadError::Io { .. } | MidiLoadError::Parse { .. }
+        }
+    )
 }
 
 impl HelperGenerationStatus {
@@ -959,14 +1039,17 @@ fn normalize_api_key_input(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PromptSubmissionModel, build_generation_request_with_prompt_validation,
-        choose_dropped_midi_path, display_file_name_from_path, has_supported_midi_extension,
-        normalize_api_key_input, parse_truthy_flag, prompt_preview, validate_prompt_input,
+        MidiSlotErrorState, PromptSubmissionModel, build_generation_request_with_prompt_validation,
+        can_retry_midi_load_error, choose_dropped_midi_path, display_file_name_from_path,
+        has_supported_midi_extension, normalize_api_key_input, parse_truthy_flag, prompt_preview,
+        validate_prompt_input,
     };
+    use sonant::app::LoadMidiError;
     use sonant::domain::{
         FileReferenceInput, GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary,
         ModelRef, ReferenceSlot, ReferenceSource,
     };
+    use sonant::infra::midi::MidiLoadError;
     use std::path::{Path, PathBuf};
 
     fn test_model() -> ModelRef {
@@ -1139,6 +1222,58 @@ mod tests {
     fn dropped_path_selection_returns_none_for_empty_input() {
         let selected = choose_dropped_midi_path(&[]);
         assert!(selected.is_none());
+    }
+
+    #[test]
+    fn can_retry_midi_load_error_for_io_failure() {
+        let error = LoadMidiError::LoadFailed {
+            source: MidiLoadError::Io {
+                message: "permission denied".to_string(),
+            },
+        };
+
+        assert!(can_retry_midi_load_error(&error));
+    }
+
+    #[test]
+    fn can_retry_midi_load_error_is_false_for_unsupported_extension() {
+        let error = LoadMidiError::LoadFailed {
+            source: MidiLoadError::UnsupportedExtension {
+                path: "/tmp/not-midi.wav".to_string(),
+            },
+        };
+
+        assert!(!can_retry_midi_load_error(&error));
+    }
+
+    #[test]
+    fn midi_slot_error_state_uses_retry_path_only_when_retryable() {
+        let io_error = LoadMidiError::LoadFailed {
+            source: MidiLoadError::Io {
+                message: "file locked".to_string(),
+            },
+        };
+        let io_state = MidiSlotErrorState::from_load_error("/tmp/retry.mid", &io_error);
+        assert!(io_state.can_retry());
+        assert_eq!(io_state.retry_path.as_deref(), Some("/tmp/retry.mid"));
+
+        let parse_error = LoadMidiError::LoadFailed {
+            source: MidiLoadError::Parse {
+                message: "invalid chunk".to_string(),
+            },
+        };
+        let parse_state = MidiSlotErrorState::from_load_error("/tmp/broken.mid", &parse_error);
+        assert!(parse_state.can_retry());
+
+        let extension_error = LoadMidiError::LoadFailed {
+            source: MidiLoadError::UnsupportedExtension {
+                path: "/tmp/invalid.wav".to_string(),
+            },
+        };
+        let extension_state =
+            MidiSlotErrorState::from_load_error("/tmp/invalid.wav", &extension_error);
+        assert!(!extension_state.can_retry());
+        assert_eq!(extension_state.retry_path, None);
     }
 
     #[test]

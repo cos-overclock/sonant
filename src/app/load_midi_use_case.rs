@@ -446,6 +446,36 @@ mod tests {
         assert!(error.user_message().contains(".mid"));
     }
 
+    #[test]
+    fn user_message_for_corrupted_midi_is_actionable() {
+        let error = LoadMidiError::LoadFailed {
+            source: MidiLoadError::Parse {
+                message: "invalid smf".to_string(),
+            },
+        };
+
+        assert!(
+            error.user_message().contains("could not be parsed as MIDI"),
+            "expected parse error message to explain corruption"
+        );
+    }
+
+    #[test]
+    fn user_message_for_io_failure_suggests_recovery() {
+        let error = LoadMidiError::LoadFailed {
+            source: MidiLoadError::Io {
+                message: "permission denied".to_string(),
+            },
+        };
+
+        assert!(
+            error
+                .user_message()
+                .contains("Check the file path and permissions"),
+            "expected IO error message to suggest path/permission checks"
+        );
+    }
+
     fn sample_reference_data(
         bars: u16,
         note_count: u32,
