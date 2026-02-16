@@ -421,6 +421,12 @@ mod tests {
                 density_hint: 0.42,
                 min_pitch: 60,
                 max_pitch: 74,
+                events: vec![crate::domain::MidiReferenceEvent {
+                    track: 0,
+                    absolute_tick: 0,
+                    delta_tick: 0,
+                    event: "NoteOn channel=0 key=60 vel=100".to_string(),
+                }],
             }],
             variation_count: 2,
         }

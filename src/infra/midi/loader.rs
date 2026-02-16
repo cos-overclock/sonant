@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::domain::MidiReferenceEvent;
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use thiserror::Error;
 
@@ -10,6 +11,12 @@ pub struct MidiSummary {
     pub note_count: u32,
     pub min_pitch: u8,
     pub max_pitch: u8,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MidiReferenceData {
+    pub summary: MidiSummary,
+    pub events: Vec<MidiReferenceEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -31,15 +38,23 @@ pub enum MidiLoadError {
 }
 
 pub fn load_midi_summary(path: impl AsRef<Path>) -> Result<MidiSummary, MidiLoadError> {
+    load_midi_reference(path).map(|reference| reference.summary)
+}
+
+pub fn load_midi_reference(path: impl AsRef<Path>) -> Result<MidiReferenceData, MidiLoadError> {
     let path = path.as_ref();
     validate_midi_extension(path)?;
     let bytes = fs::read(path).map_err(|error| MidiLoadError::Io {
         message: error.to_string(),
     })?;
-    parse_midi_summary(&bytes)
+    parse_midi_reference(&bytes)
 }
 
 pub fn parse_midi_summary(bytes: &[u8]) -> Result<MidiSummary, MidiLoadError> {
+    parse_midi_reference(bytes).map(|reference| reference.summary)
+}
+
+pub fn parse_midi_reference(bytes: &[u8]) -> Result<MidiReferenceData, MidiLoadError> {
     let smf = Smf::parse(bytes).map_err(|error| MidiLoadError::Parse {
         message: error.to_string(),
     })?;
@@ -53,14 +68,28 @@ pub fn parse_midi_summary(bytes: &[u8]) -> Result<MidiSummary, MidiLoadError> {
     let mut min_pitch = u8::MAX;
     let mut max_pitch = u8::MIN;
     let mut max_tick: u64 = 0;
+    let mut events = Vec::new();
 
-    for track in &smf.tracks {
+    for (track_index, track_events) in smf.tracks.iter().enumerate() {
+        let track_id = u16::try_from(track_index).map_err(|_| MidiLoadError::Overflow {
+            field: "track_index",
+        })?;
         let mut absolute_tick: u64 = 0;
-        for event in track {
+        for event in track_events {
             absolute_tick += u64::from(event.delta.as_int());
             if absolute_tick > max_tick {
                 max_tick = absolute_tick;
             }
+            let absolute_tick_u32 =
+                u32::try_from(absolute_tick).map_err(|_| MidiLoadError::Overflow {
+                    field: "absolute_tick",
+                })?;
+            events.push(MidiReferenceEvent {
+                track: track_id,
+                absolute_tick: absolute_tick_u32,
+                delta_tick: event.delta.as_int(),
+                event: format!("{:?}", event.kind),
+            });
 
             match &event.kind {
                 TrackEventKind::Midi { message, .. } => {
@@ -104,11 +133,14 @@ pub fn parse_midi_summary(bytes: &[u8]) -> Result<MidiSummary, MidiLoadError> {
         field: "note_count",
     })?;
 
-    Ok(MidiSummary {
-        bars,
-        note_count,
-        min_pitch,
-        max_pitch,
+    Ok(MidiReferenceData {
+        summary: MidiSummary {
+            bars,
+            note_count,
+            min_pitch,
+            max_pitch,
+        },
+        events,
     })
 }
 
@@ -177,7 +209,7 @@ mod tests {
         Format, Fps, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind,
     };
 
-    use super::{MidiLoadError, load_midi_summary};
+    use super::{MidiLoadError, load_midi_reference, load_midi_summary};
 
     #[test]
     fn load_midi_summary_extracts_basic_metrics() {
@@ -262,6 +294,53 @@ mod tests {
         assert_eq!(summary.note_count, 3);
         assert_eq!(summary.min_pitch, 60);
         assert_eq!(summary.max_pitch, 67);
+    }
+
+    #[test]
+    fn load_midi_reference_extracts_all_track_events() {
+        let smf = Smf {
+            header: Header::new(Format::SingleTrack, Timing::Metrical(u15::new(96))),
+            tracks: vec![vec![
+                TrackEvent {
+                    delta: u28::new(0),
+                    kind: TrackEventKind::Meta(MetaMessage::TimeSignature(4, 2, 24, 8)),
+                },
+                TrackEvent {
+                    delta: u28::new(0),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::new(0),
+                        message: MidiMessage::NoteOn {
+                            key: u7::new(60),
+                            vel: u7::new(100),
+                        },
+                    },
+                },
+                TrackEvent {
+                    delta: u28::new(96),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::new(0),
+                        message: MidiMessage::NoteOff {
+                            key: u7::new(60),
+                            vel: u7::new(0),
+                        },
+                    },
+                },
+                TrackEvent {
+                    delta: u28::new(0),
+                    kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+                },
+            ]],
+        };
+
+        let midi_file = write_midi_file("mid", smf);
+        let reference = load_midi_reference(midi_file.path()).expect("valid midi should load");
+
+        assert_eq!(reference.summary.note_count, 1);
+        assert_eq!(reference.events.len(), 4);
+        assert_eq!(reference.events[0].absolute_tick, 0);
+        assert!(reference.events[0].event.contains("TimeSignature"));
+        assert!(reference.events[1].event.contains("NoteOn"));
+        assert!(reference.events[3].event.contains("EndOfTrack"));
     }
 
     #[test]
