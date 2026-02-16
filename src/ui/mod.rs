@@ -176,16 +176,26 @@ mod tests {
         let mut model = PromptSubmissionModel::new(test_model());
 
         let first = model
-            .prepare_request("first prompt".to_string(), Vec::new())
+            .prepare_request(
+                GenerationMode::Melody,
+                "first prompt".to_string(),
+                Vec::new(),
+            )
             .expect("first prompt should be accepted");
         let second = model
-            .prepare_request("second prompt".to_string(), Vec::new())
+            .prepare_request(
+                GenerationMode::Bassline,
+                "second prompt".to_string(),
+                Vec::new(),
+            )
             .expect("second prompt should be accepted");
 
         assert_eq!(first.request_id, "gpui-helper-req-1");
         assert_eq!(second.request_id, "gpui-helper-req-2");
         assert_eq!(first.prompt, "first prompt");
         assert_eq!(second.prompt, "second prompt");
+        assert_eq!(first.mode, GenerationMode::Melody);
+        assert_eq!(second.mode, GenerationMode::Bassline);
     }
 
     #[test]
@@ -194,9 +204,14 @@ mod tests {
         let references = vec![test_reference("/tmp/reference.mid")];
 
         let request = model
-            .prepare_request("continue this".to_string(), references.clone())
+            .prepare_request(
+                GenerationMode::Continuation,
+                "continue this".to_string(),
+                references.clone(),
+            )
             .expect("request should be prepared");
 
+        assert_eq!(request.mode, GenerationMode::Continuation);
         assert_eq!(request.references, references);
     }
 

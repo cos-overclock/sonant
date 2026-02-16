@@ -23,6 +23,7 @@ impl PromptSubmissionModel {
 
     pub(super) fn prepare_request(
         &mut self,
+        mode: GenerationMode,
         prompt: String,
         references: Vec<MidiReferenceSummary>,
     ) -> Result<GenerationRequest, LlmError> {
@@ -34,7 +35,7 @@ impl PromptSubmissionModel {
         build_generation_request_with_prompt_validation(
             request_id,
             self.model.clone(),
-            GenerationMode::Melody,
+            mode,
             prompt,
             references,
         )

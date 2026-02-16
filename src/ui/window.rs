@@ -16,7 +16,7 @@ use sonant::{
         GenerationJobManager, GenerationJobState, GenerationJobUpdate, LoadMidiCommand,
         LoadMidiUseCase,
     },
-    domain::{LlmError, ReferenceSlot, has_supported_midi_extension},
+    domain::{GenerationMode, LlmError, ReferenceSlot, has_supported_midi_extension},
 };
 
 use super::backend::{
@@ -43,6 +43,7 @@ pub(super) struct SonantMainWindow {
     load_midi_use_case: Arc<LoadMidiUseCase>,
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
+    selected_generation_mode: GenerationMode,
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     api_key_error: Option<String>,
@@ -81,6 +82,7 @@ impl SonantMainWindow {
             load_midi_use_case: Arc::new(LoadMidiUseCase::new()),
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
+            selected_generation_mode: GenerationMode::Melody,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             api_key_error: None,
@@ -130,10 +132,11 @@ impl SonantMainWindow {
         }
 
         let prompt = self.prompt_input.read(cx).value().to_string();
-        let request = match self
-            .submission_model
-            .prepare_request(prompt, self.load_midi_use_case.snapshot_references())
-        {
+        let request = match self.submission_model.prepare_request(
+            self.selected_generation_mode,
+            prompt,
+            self.load_midi_use_case.snapshot_references(),
+        ) {
             Ok(request) => request,
             Err(LlmError::Validation { .. }) => {
                 self.generation_status = HelperGenerationStatus::Idle;
@@ -177,6 +180,25 @@ impl SonantMainWindow {
         }
 
         cx.notify();
+    }
+
+    fn on_generation_mode_selected(&mut self, mode: GenerationMode, cx: &mut Context<Self>) {
+        if self.selected_generation_mode != mode {
+            self.selected_generation_mode = mode;
+            cx.notify();
+        }
+    }
+
+    fn generation_mode_label(mode: GenerationMode) -> &'static str {
+        match mode {
+            GenerationMode::Melody => "Melody",
+            GenerationMode::ChordProgression => "Chord Progression",
+            GenerationMode::DrumPattern => "Drum Pattern",
+            GenerationMode::Bassline => "Bassline",
+            GenerationMode::CounterMelody => "Counter Melody",
+            GenerationMode::Harmony => "Harmony",
+            GenerationMode::Continuation => "Continuation",
+        }
     }
 
     fn start_update_polling(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -370,6 +392,7 @@ impl Render for SonantMainWindow {
         let status_label = self.generation_status.label();
         let status_color = self.generation_status.color();
         let generating = self.generation_status.is_submitting_or_running();
+        let selected_mode_label = Self::generation_mode_label(self.selected_generation_mode);
         let melody_reference = self
             .load_midi_use_case
             .slot_reference(ReferenceSlot::Melody);
@@ -385,6 +408,18 @@ impl Render for SonantMainWindow {
             .as_ref()
             .map(|reference| format!("Bars: {} / Notes: {}", reference.bars, reference.note_count));
         let melody_slot_set = melody_reference.is_some();
+        let mode_button = |id: &'static str, mode: GenerationMode| {
+            let button = Button::new(id)
+                .label(Self::generation_mode_label(mode))
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    this.on_generation_mode_selected(mode, cx)
+                }));
+            if self.selected_generation_mode == mode {
+                button.primary()
+            } else {
+                button
+            }
+        };
 
         div()
             .size_full()
@@ -405,6 +440,63 @@ impl Render for SonantMainWindow {
                     .text_color(rgb(0xfca5a5))
                     .child(format!("API Key: {message}"))
             }))
+            .child(Label::new("Generation Mode"))
+            .child(
+                div()
+                    .id("generation-mode-selector")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .border_1()
+                    .border_color(rgb(0x334155))
+                    .bg(rgb(0x0f172a))
+                    .child(
+                        div()
+                            .text_color(rgb(0x93c5fd))
+                            .child(format!("Selected: {selected_mode_label}")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(mode_button(
+                                "generation-mode-melody",
+                                GenerationMode::Melody,
+                            ))
+                            .child(mode_button(
+                                "generation-mode-chord-progression",
+                                GenerationMode::ChordProgression,
+                            ))
+                            .child(mode_button(
+                                "generation-mode-drum-pattern",
+                                GenerationMode::DrumPattern,
+                            ))
+                            .child(mode_button(
+                                "generation-mode-bassline",
+                                GenerationMode::Bassline,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(mode_button(
+                                "generation-mode-counter-melody",
+                                GenerationMode::CounterMelody,
+                            ))
+                            .child(mode_button(
+                                "generation-mode-harmony",
+                                GenerationMode::Harmony,
+                            ))
+                            .child(mode_button(
+                                "generation-mode-continuation",
+                                GenerationMode::Continuation,
+                            )),
+                    ),
+            )
             .child(Label::new("Reference MIDI (Melody Slot)"))
             .child(
                 div()
