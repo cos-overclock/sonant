@@ -620,4 +620,20 @@ mod tests {
             MidiInputRouterError::RecordingChannelOutOfRange { channel: 17 }
         );
     }
+
+    #[test]
+    fn try_with_limits_rejects_zero_bar_capacity() {
+        assert!(matches!(
+            MidiInputRouter::try_with_limits(0, 8),
+            Err(MidiInputRouterError::ZeroBarCapacity)
+        ));
+    }
+
+    #[test]
+    fn try_with_limits_rejects_zero_events_per_bar_capacity() {
+        assert!(matches!(
+            MidiInputRouter::try_with_limits(8, 0),
+            Err(MidiInputRouterError::ZeroEventsPerBarCapacity)
+        ));
+    }
 }
