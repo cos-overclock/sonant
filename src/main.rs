@@ -1038,5 +1038,7 @@ mod tests {
     fn display_file_name_falls_back_when_no_name_exists() {
         assert_eq!(display_file_name_from_path("/tmp/melody.mid"), "melody.mid");
         assert_eq!(display_file_name_from_path("melody.mid"), "melody.mid");
+        // When no file name component exists (e.g., trailing separator), the path itself is returned.
+        assert_eq!(display_file_name_from_path("/tmp/"), "/tmp/");
     }
 }
