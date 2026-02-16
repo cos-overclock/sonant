@@ -10,10 +10,10 @@ use crate::domain::{
     GenerationMetadata, GenerationRequest, GenerationResult, GenerationUsage, LlmError,
 };
 
-use super::LlmProvider;
 use super::env::{read_env_var, read_timeout_from_env, resolve_timeout_with_global_fallback};
 use super::response_parsing::{extract_json_payload, truncate_message};
-use super::schema_validator::{GENERATION_RESULT_JSON_SCHEMA, LlmResponseSchemaValidator};
+use super::schema_validator::LlmResponseSchemaValidator;
+use super::{LlmProvider, PromptBuilder};
 
 const DEFAULT_PROVIDER_ID: &str = "openai_compatible";
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
@@ -190,25 +190,18 @@ impl OpenAiCompatibleProvider {
         &self,
         request: &GenerationRequest,
     ) -> Result<OpenAiChatCompletionsRequest, LlmError> {
-        let request_json = serde_json::to_string_pretty(request).map_err(|err| {
-            LlmError::internal(format!("failed to serialize request prompt: {err}"))
-        })?;
-        let user_content = format!(
-            "Input GenerationRequest (JSON):\n{request_json}\n\nReturn only a JSON object that matches the schema below.\nDo not include markdown fences.\nSchema:\n{GENERATION_RESULT_JSON_SCHEMA}"
-        );
+        let prompt = PromptBuilder::build(request);
 
         Ok(OpenAiChatCompletionsRequest {
             model: request.model.model.clone(),
             messages: vec![
                 OpenAiChatMessageRequest {
                     role: "system".to_string(),
-                    content:
-                        "You are Sonant's generation backend. Output must be strict JSON only."
-                            .to_string(),
+                    content: prompt.system,
                 },
                 OpenAiChatMessageRequest {
                     role: "user".to_string(),
-                    content: user_content,
+                    content: prompt.user,
                 },
             ],
             temperature: request.params.temperature,
@@ -709,12 +702,12 @@ mod tests {
         assert!(
             payload.messages[1]
                 .content
-                .contains("\"request_id\": \"req-42\"")
+                .contains("request_id must equal \"req-42\"")
         );
         assert!(
             payload.messages[1]
                 .content
-                .contains("\"variation_count\": 2")
+                .contains("candidates must contain exactly 2 items")
         );
     }
 
