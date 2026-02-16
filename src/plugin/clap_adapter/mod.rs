@@ -243,6 +243,17 @@ impl SonantShared {
     }
 }
 
+impl crate::app::LiveInputEventSource for SonantShared {
+    fn try_pop_live_input_event(&self) -> Option<crate::app::LiveInputEvent> {
+        self.pop_live_input_event()
+            .map(|event| crate::app::LiveInputEvent {
+                time: event.time,
+                port_index: event.port_index,
+                data: event.data,
+            })
+    }
+}
+
 impl PluginShared<'_> for SonantShared {}
 
 pub struct SonantPluginMainThread<'a> {
@@ -330,6 +341,7 @@ impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
 mod tests {
     use super::*;
     use clack_plugin::events::event_types::{NoteOffEvent, NoteOnEvent};
+    use std::sync::Arc;
 
     #[test]
     fn map_input_event_converts_note_events_to_midi() {
@@ -488,6 +500,31 @@ mod tests {
             bridge.pop_latest_generated_or(Some(fallback)),
             Some(fallback)
         );
+    }
+
+    #[test]
+    fn live_capture_path_exposes_clap_live_input_to_app_layer() {
+        let shared = Arc::new(SonantShared::new());
+        shared.midi_bridge.push_live_input(RtMidiEvent {
+            time: 42,
+            port_index: 1,
+            data: [0x92, 65, 127],
+        });
+        shared.flush_live_input_to_app();
+
+        let source: Arc<dyn crate::app::LiveInputEventSource> = shared.clone();
+        let capture = crate::app::LiveMidiCapture::with_capacity(source, 8);
+
+        assert_eq!(capture.ingest_available(), 1);
+        assert_eq!(
+            capture.poll_event(),
+            Some(crate::app::LiveInputEvent {
+                time: 42,
+                port_index: 1,
+                data: [0x92, 65, 127],
+            })
+        );
+        assert_eq!(capture.poll_event(), None);
     }
 }
 
