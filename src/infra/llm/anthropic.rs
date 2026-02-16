@@ -373,6 +373,7 @@ mod tests {
         FileReferenceInput, GenerationMode, GenerationParams, GenerationRequest, LlmError,
         MidiReferenceSummary, ModelRef, ReferenceSlot, ReferenceSource,
     };
+    use crate::infra::llm::PromptBuilder;
     use reqwest::StatusCode;
     use std::time::Duration;
 
@@ -446,6 +447,42 @@ mod tests {
             payload.messages[0]
                 .content
                 .contains("candidates must contain exactly 2 items")
+        );
+    }
+
+    #[test]
+    fn build_request_payload_uses_prompt_builder_output() {
+        let request = request();
+        let prompt = PromptBuilder::build(&request);
+
+        let payload = provider()
+            .build_request_payload(&request)
+            .expect("payload should be built");
+
+        assert_eq!(payload.system, prompt.system);
+        assert_eq!(payload.messages.len(), 1);
+        assert_eq!(payload.messages[0].role, "user");
+        assert_eq!(payload.messages[0].content, prompt.user);
+    }
+
+    #[test]
+    fn build_request_payload_reflects_mode_in_prompt_content() {
+        let mut request = request();
+        request.mode = GenerationMode::Continuation;
+
+        let payload = provider()
+            .build_request_payload(&request)
+            .expect("payload should be built");
+
+        assert!(
+            payload.messages[0]
+                .content
+                .contains("Generation mode: continuation")
+        );
+        assert!(
+            payload.messages[0]
+                .content
+                .contains("Continue the musical idea")
         );
     }
 

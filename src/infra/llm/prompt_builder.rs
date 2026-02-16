@@ -164,8 +164,7 @@ fn render_references(references: &[MidiReferenceSummary]) -> String {
             writeln!(rendered, "  events: []")
                 .expect("failed to write empty events list to String");
         } else {
-            writeln!(rendered, "  events:")
-                .expect("failed to write events header to String");
+            writeln!(rendered, "  events:").expect("failed to write events header to String");
             for event in &reference.events {
                 writeln!(
                     rendered,
