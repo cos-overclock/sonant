@@ -254,15 +254,70 @@ impl GenerationRequest {
                 "variation_count must be greater than 0",
             ));
         }
-        if matches!(self.mode, GenerationMode::Continuation) && self.references.is_empty() {
-            return Err(LlmError::validation(
-                "continuation mode requires at least one MIDI reference",
-            ));
-        }
         for reference in &self.references {
             reference.validate()?;
         }
+        self.validate_mode_reference_requirements()?;
         Ok(())
+    }
+
+    fn validate_mode_reference_requirements(&self) -> Result<(), LlmError> {
+        match self.mode {
+            GenerationMode::Melody
+            | GenerationMode::ChordProgression
+            | GenerationMode::DrumPattern => Ok(()),
+            GenerationMode::Bassline => {
+                if self.has_reference_in_any_slot(&[
+                    ReferenceSlot::Melody,
+                    ReferenceSlot::ChordProgression,
+                ]) {
+                    Ok(())
+                } else {
+                    Err(LlmError::validation(
+                        "bassline mode requires at least one melody or chord progression MIDI reference",
+                    ))
+                }
+            }
+            GenerationMode::CounterMelody => {
+                if self.has_reference_slot(ReferenceSlot::Melody) {
+                    Ok(())
+                } else {
+                    Err(LlmError::validation(
+                        "counter melody mode requires at least one melody MIDI reference",
+                    ))
+                }
+            }
+            GenerationMode::Harmony => {
+                if self.has_reference_slot(ReferenceSlot::Melody) {
+                    Ok(())
+                } else {
+                    Err(LlmError::validation(
+                        "harmony mode requires at least one melody MIDI reference",
+                    ))
+                }
+            }
+            GenerationMode::Continuation => {
+                if self.references.is_empty() {
+                    Err(LlmError::validation(
+                        "continuation mode requires at least one MIDI reference",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    fn has_reference_slot(&self, slot: ReferenceSlot) -> bool {
+        self.references
+            .iter()
+            .any(|reference| reference.slot == slot)
+    }
+
+    fn has_reference_in_any_slot(&self, slots: &[ReferenceSlot]) -> bool {
+        self.references
+            .iter()
+            .any(|reference| slots.contains(&reference.slot))
     }
 }
 
@@ -444,6 +499,49 @@ mod tests {
         }
     }
 
+    fn sample_reference(slot: ReferenceSlot) -> MidiReferenceSummary {
+        MidiReferenceSummary {
+            slot,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "reference.mid".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+            events: vec![sample_event()],
+        }
+    }
+
+    fn valid_request(
+        mode: GenerationMode,
+        references: Vec<MidiReferenceSummary>,
+    ) -> GenerationRequest {
+        GenerationRequest {
+            request_id: "req-1".to_string(),
+            model: ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-3-5-sonnet".to_string(),
+            },
+            mode,
+            prompt: "generate MIDI".to_string(),
+            params: GenerationParams {
+                bpm: 120,
+                key: "C".to_string(),
+                scale: "major".to_string(),
+                density: 3,
+                complexity: 3,
+                temperature: Some(0.7),
+                top_p: Some(0.9),
+                max_tokens: Some(2048),
+            },
+            references,
+            variation_count: 1,
+        }
+    }
+
     #[test]
     fn request_validation_rejects_empty_prompt() {
         let request = GenerationRequest {
@@ -476,33 +574,110 @@ mod tests {
 
     #[test]
     fn request_validation_requires_reference_in_continuation_mode() {
-        let request = GenerationRequest {
-            request_id: "req-1".to_string(),
-            model: ModelRef {
-                provider: "anthropic".to_string(),
-                model: "claude-3-5-sonnet".to_string(),
-            },
-            mode: GenerationMode::Continuation,
-            prompt: "continue this phrase".to_string(),
-            params: GenerationParams {
-                bpm: 120,
-                key: "C".to_string(),
-                scale: "major".to_string(),
-                density: 3,
-                complexity: 3,
-                temperature: Some(0.7),
-                top_p: Some(0.9),
-                max_tokens: Some(2048),
-            },
-            references: Vec::new(),
-            variation_count: 1,
-        };
+        let request = valid_request(GenerationMode::Continuation, Vec::new());
 
         assert!(matches!(
             request.validate(),
             Err(LlmError::Validation { message })
             if message == "continuation mode requires at least one MIDI reference"
         ));
+    }
+
+    #[test]
+    fn request_validation_allows_melody_chord_and_drum_modes_without_references() {
+        let modes = [
+            GenerationMode::Melody,
+            GenerationMode::ChordProgression,
+            GenerationMode::DrumPattern,
+        ];
+
+        for mode in modes {
+            let request = valid_request(mode, Vec::new());
+            assert!(
+                request.validate().is_ok(),
+                "mode {mode:?} should allow request without references"
+            );
+        }
+    }
+
+    #[test]
+    fn request_validation_requires_melody_or_chord_reference_for_bassline_mode() {
+        let request_without_reference = valid_request(GenerationMode::Bassline, Vec::new());
+
+        assert!(matches!(
+            request_without_reference.validate(),
+            Err(LlmError::Validation { message })
+            if message
+                == "bassline mode requires at least one melody or chord progression MIDI reference"
+        ));
+
+        let request_with_melody_reference = valid_request(
+            GenerationMode::Bassline,
+            vec![sample_reference(ReferenceSlot::Melody)],
+        );
+        assert!(request_with_melody_reference.validate().is_ok());
+
+        let request_with_chord_reference = valid_request(
+            GenerationMode::Bassline,
+            vec![sample_reference(ReferenceSlot::ChordProgression)],
+        );
+        assert!(request_with_chord_reference.validate().is_ok());
+    }
+
+    #[test]
+    fn request_validation_requires_melody_reference_for_counter_melody_mode() {
+        let request_without_reference = valid_request(GenerationMode::CounterMelody, Vec::new());
+
+        assert!(matches!(
+            request_without_reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "counter melody mode requires at least one melody MIDI reference"
+        ));
+
+        let request_with_non_melody_reference = valid_request(
+            GenerationMode::CounterMelody,
+            vec![sample_reference(ReferenceSlot::ChordProgression)],
+        );
+
+        assert!(matches!(
+            request_with_non_melody_reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "counter melody mode requires at least one melody MIDI reference"
+        ));
+
+        let request_with_melody_reference = valid_request(
+            GenerationMode::CounterMelody,
+            vec![sample_reference(ReferenceSlot::Melody)],
+        );
+        assert!(request_with_melody_reference.validate().is_ok());
+    }
+
+    #[test]
+    fn request_validation_requires_melody_reference_for_harmony_mode() {
+        let request_without_reference = valid_request(GenerationMode::Harmony, Vec::new());
+
+        assert!(matches!(
+            request_without_reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "harmony mode requires at least one melody MIDI reference"
+        ));
+
+        let request_with_non_melody_reference = valid_request(
+            GenerationMode::Harmony,
+            vec![sample_reference(ReferenceSlot::DrumPattern)],
+        );
+
+        assert!(matches!(
+            request_with_non_melody_reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "harmony mode requires at least one melody MIDI reference"
+        ));
+
+        let request_with_melody_reference = valid_request(
+            GenerationMode::Harmony,
+            vec![sample_reference(ReferenceSlot::Melody)],
+        );
+        assert!(request_with_melody_reference.validate().is_ok());
     }
 
     #[test]
