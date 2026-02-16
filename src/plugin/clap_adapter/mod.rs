@@ -346,6 +346,7 @@ impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
 mod tests {
     use super::*;
     use clack_plugin::events::event_types::{NoteOffEvent, NoteOnEvent};
+    use std::num::NonZeroUsize;
     use std::sync::Arc;
 
     #[test]
@@ -518,7 +519,10 @@ mod tests {
         shared.flush_live_input_to_app();
 
         let source: Arc<dyn crate::app::LiveInputEventSource> = shared.clone();
-        let capture = crate::app::LiveMidiCapture::with_capacity(source, 8);
+        let capture = crate::app::LiveMidiCapture::with_capacity(
+            source,
+            NonZeroUsize::new(8).expect("test capacity must be non-zero"),
+        );
 
         assert_eq!(capture.ingest_available(), 1);
         assert_eq!(

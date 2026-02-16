@@ -5,7 +5,9 @@ mod load_midi_use_case;
 
 pub use generation_job_manager::{GenerationJobManager, GenerationJobState, GenerationJobUpdate};
 pub use generation_service::{GenerationRetryConfig, GenerationService};
-pub use live_midi_capture::{LiveInputEvent, LiveInputEventSource, LiveMidiCapture};
+pub use live_midi_capture::{
+    LiveInputEvent, LiveInputEventSource, LiveMidiCapture, LiveMidiCaptureConfigError,
+};
 pub use load_midi_use_case::{
     FileMidiReferenceLoader, LoadMidiCommand, LoadMidiError, LoadMidiOutcome, LoadMidiUseCase,
     MidiReferenceLoader,
