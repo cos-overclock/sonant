@@ -135,33 +135,44 @@ fn render_references(references: &[MidiReferenceSummary]) -> String {
             .map(|file| file.path.as_str())
             .unwrap_or("n/a");
 
-        let _ = writeln!(rendered, "- reference #{}", index + 1);
-        let _ = writeln!(rendered, "  slot: {}", reference_slot_name(reference.slot));
-        let _ = writeln!(
+        writeln!(rendered, "- reference #{}", index + 1)
+            .expect("failed to write reference header to String");
+        writeln!(rendered, "  slot: {}", reference_slot_name(reference.slot))
+            .expect("failed to write reference slot to String");
+        writeln!(
             rendered,
             "  source: {}",
             reference_source_name(reference.source)
-        );
-        let _ = writeln!(rendered, "  file_path: {file_path}");
-        let _ = writeln!(rendered, "  bars: {}", reference.bars);
-        let _ = writeln!(rendered, "  note_count: {}", reference.note_count);
-        let _ = writeln!(rendered, "  density_hint: {:.3}", reference.density_hint);
-        let _ = writeln!(
+        )
+        .expect("failed to write reference source to String");
+        writeln!(rendered, "  file_path: {file_path}")
+            .expect("failed to write reference file_path to String");
+        writeln!(rendered, "  bars: {}", reference.bars)
+            .expect("failed to write reference bars to String");
+        writeln!(rendered, "  note_count: {}", reference.note_count)
+            .expect("failed to write reference note_count to String");
+        writeln!(rendered, "  density_hint: {:.3}", reference.density_hint)
+            .expect("failed to write reference density_hint to String");
+        writeln!(
             rendered,
             "  pitch_range: {}..{}",
             reference.min_pitch, reference.max_pitch
-        );
+        )
+        .expect("failed to write reference pitch_range to String");
 
         if reference.events.is_empty() {
-            let _ = writeln!(rendered, "  events: []");
+            writeln!(rendered, "  events: []")
+                .expect("failed to write empty events list to String");
         } else {
-            let _ = writeln!(rendered, "  events:");
+            writeln!(rendered, "  events:")
+                .expect("failed to write events header to String");
             for event in &reference.events {
-                let _ = writeln!(
+                writeln!(
                     rendered,
                     "    - track={} abs_tick={} delta_tick={} event={}",
                     event.track, event.absolute_tick, event.delta_tick, event.event
-                );
+                )
+                .expect("failed to write reference event to String");
             }
         }
     }
