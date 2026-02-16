@@ -245,6 +245,7 @@ impl SonantMainWindow {
             }
         };
 
+        // `prepare_request` only validates prompt text; run full contract validation here.
         if let Err(error) = request.validate() {
             self.generation_status = HelperGenerationStatus::Failed {
                 message: error.user_message(),
@@ -834,7 +835,7 @@ impl PromptSubmissionModel {
             self.next_request_number
         );
         self.next_request_number = self.next_request_number.saturating_add(1);
-        build_generation_request(
+        build_generation_request_with_prompt_validation(
             request_id,
             self.model.clone(),
             GenerationMode::Melody,
@@ -848,7 +849,9 @@ impl PromptSubmissionModel {
     }
 }
 
-fn build_generation_request(
+/// Builds a request after validating only prompt text.
+/// Callers must run `GenerationRequest::validate()` before submission.
+fn build_generation_request_with_prompt_validation(
     request_id: String,
     model: ModelRef,
     mode: GenerationMode,
@@ -956,9 +959,9 @@ fn normalize_api_key_input(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PromptSubmissionModel, build_generation_request, choose_dropped_midi_path,
-        display_file_name_from_path, has_supported_midi_extension, normalize_api_key_input,
-        parse_truthy_flag, prompt_preview, validate_prompt_input,
+        PromptSubmissionModel, build_generation_request_with_prompt_validation,
+        choose_dropped_midi_path, display_file_name_from_path, has_supported_midi_extension,
+        normalize_api_key_input, parse_truthy_flag, prompt_preview, validate_prompt_input,
     };
     use sonant::domain::{
         FileReferenceInput, GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary,
@@ -1007,7 +1010,7 @@ mod tests {
     #[test]
     fn build_generation_request_reflects_prompt_text() {
         let prompt = "  warm synth melody with syncopation  ".to_string();
-        let request = build_generation_request(
+        let request = build_generation_request_with_prompt_validation(
             "req-1".to_string(),
             test_model(),
             GenerationMode::Melody,
@@ -1050,7 +1053,7 @@ mod tests {
 
     #[test]
     fn continuation_validation_requires_reference_after_conversion() {
-        let request = build_generation_request(
+        let request = build_generation_request_with_prompt_validation(
             "req-cont".to_string(),
             test_model(),
             GenerationMode::Continuation,
@@ -1068,7 +1071,7 @@ mod tests {
 
     #[test]
     fn continuation_validation_accepts_reference_after_conversion() {
-        let request = build_generation_request(
+        let request = build_generation_request_with_prompt_validation(
             "req-cont".to_string(),
             test_model(),
             GenerationMode::Continuation,
