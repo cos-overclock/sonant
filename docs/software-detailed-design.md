@@ -54,6 +54,20 @@ src/
       candidate_navigator.rs
 ```
 
+### 2.1 現行実装との対応（FR-05関連 / 2026-02-16時点）
+
+| 観点 | 現行実装モジュール |
+|---|---|
+| モード定義 | `domain/generation_contract.rs` (`GenerationMode`) |
+| モード別参照要件の最終判定 | `domain/generation_contract.rs` (`GenerationRequest::validate_mode_reference_requirements`) |
+| UI事前判定/メッセージ | `ui/state.rs` (`mode_reference_requirement*`), `ui/window.rs` (`on_generate_clicked`) |
+| モード別プロンプト構築 | `infra/llm/prompt_builder.rs` (`PromptBuilder`) |
+| API呼び出し | `infra/llm/anthropic.rs`, `infra/llm/openai_compatible.rs` |
+
+補足:
+
+- 上記は実装済み（As-Is）の対応であり、セクション2のツリーは将来拡張を含む目標構成（To-Be）を示す。
+
 ## 3. ドメインモデル
 
 ### 3.1 基本型
@@ -125,15 +139,15 @@ pub struct GenerationCandidate {
 - `density/complexity` は `1..=5`
 - モード別参照MIDI要件（FR-05a〜g）は以下の通り
 
-| Mode | 必須参照 | 任意参照 |
-|---|---|---|
-| `Melody` | なし | すべての `ReferenceSlot` |
-| `ChordProgression` | なし | すべての `ReferenceSlot` |
-| `DrumPattern` | なし | すべての `ReferenceSlot` |
-| `Bassline` | なし | すべての `ReferenceSlot` |
-| `CounterMelody` | `Melody` を最低1件 | `ChordProgression` など追加参照 |
-| `Harmony` | `Melody` を最低1件 | `ChordProgression` など追加参照 |
-| `Continuation` | いずれかの `ReferenceSlot` を最低1件（既存フレーズの継続元） | 追加参照 |
+| FR | Mode | 必須参照 | 任意参照 | 判定モジュール |
+|---|---|---|---|---|
+| FR-05a | `Melody` | なし | すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` |
+| FR-05b | `ChordProgression` | なし | すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` |
+| FR-05c | `DrumPattern` | なし | すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` |
+| FR-05d | `Bassline` | なし | すべての `ReferenceSlot` | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` |
+| FR-05e | `CounterMelody` | `ReferenceSlot::Melody` を最低1件 | その他スロット | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` |
+| FR-05f | `Harmony` | `ReferenceSlot::Melody` を最低1件 | その他スロット | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` |
+| FR-05g | `Continuation` | いずれかの `ReferenceSlot` を最低1件（継続元） | 追加参照 | `domain::generation_contract::GenerationRequest::validate_mode_reference_requirements`, `ui::state::mode_reference_requirement_satisfied` |
 
 - `source=File` の参照MIDIは `events` が空であってはならない
 - リアルタイム入力で使用する `channel` は `1..=16`
@@ -173,6 +187,16 @@ pub trait GenerationCoordinator {
 - 音楽理論パラメーターをプロンプトへ反映
 - 参照MIDI特徴（音域/密度/リズム）を埋め込み
 - 参照MIDIイベント列（`MidiReferenceSummary.events`）をLLM入力へ含める
+
+責務分担（PromptBuilder導入後）:
+
+| 担当 | 実装モジュール | FR-05との関係 |
+|---|---|---|
+| 入力検証の最終責任 | `domain/generation_contract.rs` | モード別必須参照の受け入れ判定を担保 |
+| UIでの事前検証 | `ui/state.rs`, `ui/window.rs` | 不足参照を送信前に表示してUXを改善 |
+| LLM入力文の構築 | `infra/llm/prompt_builder.rs` | モード別テンプレートと参照MIDI情報を組み立て |
+| API送信とリトライ | `app/generation_service.rs`, `infra/llm/*` | PromptBuilder出力をプロバイダへ送信 |
+| 応答検証 | `infra/llm/schema_validator.rs`, `domain/generation_contract.rs` | JSON契約違反・不正結果を検出 |
 
 設計ポイント:
 
@@ -394,6 +418,17 @@ UI表示ポリシー:
 
 3. Phase 3:
 - 履歴・複数候補・プリセット・エクスポート
+
+### 10.1 FR-05実装進捗チェックリスト（2026-02-16時点）
+
+- [x] `GenerationMode` に7モードを定義
+- [x] モード別必須参照の検証を `GenerationRequest::validate_mode_reference_requirements` に実装
+- [x] `PromptBuilder` に7モードのテンプレート分岐を実装
+- [x] `PromptBuilder` で `MidiReferenceSummary.events` をLLM入力へ注入
+- [x] UIでモード別参照要件を表示し、未達時の生成をブロック
+- [x] FR-05要件マトリクスを `domain` / `ui` / `infra::llm` のテストで検証
+- [ ] UIで複数 `ReferenceSlot`（Melody以外）を個別に設定可能にする
+- [ ] リアルタイム入力のモード別スロット設定とチャンネルマッピングUIを接続
 
 ## 11. 決定事項（2026-02-12）
 
