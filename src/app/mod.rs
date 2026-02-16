@@ -3,6 +3,7 @@ mod generation_service;
 mod input_track_model;
 mod live_midi_capture;
 mod load_midi_use_case;
+mod midi_input_router;
 
 pub use generation_job_manager::{GenerationJobManager, GenerationJobState, GenerationJobUpdate};
 pub use generation_service::{GenerationRetryConfig, GenerationService};
@@ -16,3 +17,4 @@ pub use load_midi_use_case::{
     FileMidiReferenceLoader, LoadMidiCommand, LoadMidiError, LoadMidiOutcome, LoadMidiUseCase,
     MidiReferenceLoader,
 };
+pub use midi_input_router::{MidiInputRouter, MidiInputRouterError};
