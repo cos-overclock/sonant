@@ -51,7 +51,8 @@ impl LiveMidiCapture {
             return Vec::new();
         }
 
-        let mut events = Vec::with_capacity(max_events);
+        let capacity = std::cmp::min(max_events, self.queue.capacity());
+        let mut events = Vec::with_capacity(capacity);
         while events.len() < max_events {
             let Some(event) = self.queue.pop() else {
                 break;
