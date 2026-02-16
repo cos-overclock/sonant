@@ -130,7 +130,7 @@ pub struct GenerationCandidate {
 | `Melody` | なし | すべての `ReferenceSlot` |
 | `ChordProgression` | なし | すべての `ReferenceSlot` |
 | `DrumPattern` | なし | すべての `ReferenceSlot` |
-| `Bassline` | `Melody` または `ChordProgression` を最低1件 | その他の `ReferenceSlot` |
+| `Bassline` | なし | すべての `ReferenceSlot` |
 | `CounterMelody` | `Melody` を最低1件 | `ChordProgression` など追加参照 |
 | `Harmony` | `Melody` を最低1件 | `ChordProgression` など追加参照 |
 | `Continuation` | いずれかの `ReferenceSlot` を最低1件（既存フレーズの継続元） | 追加参照 |

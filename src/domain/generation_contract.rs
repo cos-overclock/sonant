@@ -265,19 +265,8 @@ impl GenerationRequest {
         match self.mode {
             GenerationMode::Melody
             | GenerationMode::ChordProgression
-            | GenerationMode::DrumPattern => Ok(()),
-            GenerationMode::Bassline => {
-                if self.has_reference_in_any_slot(&[
-                    ReferenceSlot::Melody,
-                    ReferenceSlot::ChordProgression,
-                ]) {
-                    Ok(())
-                } else {
-                    Err(LlmError::validation(
-                        "bassline mode requires at least one melody or chord progression MIDI reference",
-                    ))
-                }
-            }
+            | GenerationMode::DrumPattern
+            | GenerationMode::Bassline => Ok(()),
             GenerationMode::CounterMelody => {
                 if self.has_reference_slot(ReferenceSlot::Melody) {
                     Ok(())
@@ -312,12 +301,6 @@ impl GenerationRequest {
         self.references
             .iter()
             .any(|reference| reference.slot == slot)
-    }
-
-    fn has_reference_in_any_slot(&self, slots: &[ReferenceSlot]) -> bool {
-        self.references
-            .iter()
-            .any(|reference| slots.contains(&reference.slot))
     }
 }
 
@@ -584,11 +567,12 @@ mod tests {
     }
 
     #[test]
-    fn request_validation_allows_melody_chord_and_drum_modes_without_references() {
+    fn request_validation_allows_modes_without_references_when_optional() {
         let modes = [
             GenerationMode::Melody,
             GenerationMode::ChordProgression,
             GenerationMode::DrumPattern,
+            GenerationMode::Bassline,
         ];
 
         for mode in modes {
@@ -601,16 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn request_validation_requires_melody_or_chord_reference_for_bassline_mode() {
-        let request_without_reference = valid_request(GenerationMode::Bassline, Vec::new());
-
-        assert!(matches!(
-            request_without_reference.validate(),
-            Err(LlmError::Validation { message })
-            if message
-                == "bassline mode requires at least one melody or chord progression MIDI reference"
-        ));
-
+    fn request_validation_allows_bassline_mode_with_melody_or_chord_references() {
         let request_with_melody_reference = valid_request(
             GenerationMode::Bassline,
             vec![sample_reference(ReferenceSlot::Melody)],

@@ -23,7 +23,10 @@ use super::backend::{
     GenerationBackend, build_generation_backend, build_generation_backend_from_api_key,
 };
 use super::request::PromptSubmissionModel;
-use super::state::{HelperGenerationStatus, MidiSlotErrorState};
+use super::state::{
+    HelperGenerationStatus, MidiSlotErrorState, mode_reference_requirement,
+    mode_reference_requirement_satisfied,
+};
 use super::utils::{
     choose_dropped_midi_path, display_file_name_from_path, dropped_path_to_load,
     log_generation_request_submission, normalize_api_key_input,
@@ -131,11 +134,22 @@ impl SonantMainWindow {
             return;
         }
 
+        let references = self.load_midi_use_case.snapshot_references();
+        if !mode_reference_requirement_satisfied(self.selected_generation_mode, &references) {
+            let message = mode_reference_requirement(self.selected_generation_mode)
+                .unmet_message
+                .unwrap_or("Selected generation mode requires additional MIDI references.")
+                .to_string();
+            self.generation_status = HelperGenerationStatus::Failed { message };
+            cx.notify();
+            return;
+        }
+
         let prompt = self.prompt_input.read(cx).value().to_string();
         let request = match self.submission_model.prepare_request(
             self.selected_generation_mode,
             prompt,
-            self.load_midi_use_case.snapshot_references(),
+            references,
         ) {
             Ok(request) => request,
             Err(LlmError::Validation { .. }) => {
@@ -393,6 +407,10 @@ impl Render for SonantMainWindow {
         let status_color = self.generation_status.color();
         let generating = self.generation_status.is_submitting_or_running();
         let selected_mode_label = Self::generation_mode_label(self.selected_generation_mode);
+        let references = self.load_midi_use_case.snapshot_references();
+        let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
+        let mode_requirement_satisfied =
+            mode_reference_requirement_satisfied(self.selected_generation_mode, &references);
         let melody_reference = self
             .load_midi_use_case
             .slot_reference(ReferenceSlot::Melody);
@@ -455,6 +473,34 @@ impl Render for SonantMainWindow {
                         div()
                             .text_color(rgb(0x93c5fd))
                             .child(format!("Selected: {selected_mode_label}")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div().text_color(rgb(0x94a3b8)).child(format!(
+                                    "Requirement: {}",
+                                    mode_requirement.description
+                                )),
+                            )
+                            .children(
+                                std::iter::once(mode_requirement_satisfied)
+                                    .filter(|ready| *ready)
+                                    .map(|_| {
+                                        div()
+                                            .text_color(rgb(0x86efac))
+                                            .child("Reference requirement satisfied.")
+                                    }),
+                            )
+                            .children(
+                                mode_requirement
+                                    .unmet_message
+                                    .iter()
+                                    .filter(|_| !mode_requirement_satisfied)
+                                    .map(|message| div().text_color(rgb(0xfca5a5)).child(*message)),
+                            ),
                     )
                     .child(
                         div()
@@ -611,7 +657,7 @@ impl Render for SonantMainWindow {
                                 "Generate"
                             })
                             .loading(generating)
-                            .disabled(generating)
+                            .disabled(generating || !mode_requirement_satisfied)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_generate_clicked(window, cx)
                             })),
