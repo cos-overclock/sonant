@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Sonant API &amp; Model Settings</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary": "#1032e2",
+              "background-light": "#f6f6f8",
+              "background-dark": "#101322",
+              // Creating derived neutrals from primary hue (approx 230)
+              "neutral-800": "#15182a", // Slightly lighter than bg-dark
+              "neutral-700": "#1f2238", // Card bg
+              "neutral-600": "#2d314d", // Borders
+              "neutral-400": "#94a3b8", // Subtext
+            },
+            fontFamily: {
+              "display": ["Inter", "sans-serif"]
+            },
+            borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-slate-800 dark:text-slate-100 min-h-screen flex items-center justify-center p-4 antialiased selection:bg-primary selection:text-white">
+<!-- Settings Modal Container -->
+<div class="w-full max-w-5xl h-[85vh] bg-white dark:bg-neutral-800 rounded-xl shadow-2xl overflow-hidden flex flex-col md:flex-row border border-slate-200 dark:border-neutral-600 relative">
+<!-- Sidebar Navigation -->
+<aside class="w-full md:w-64 bg-slate-50 dark:bg-background-dark border-r border-slate-200 dark:border-neutral-600 flex flex-col p-4 shrink-0">
+<div class="mb-8 px-2 flex items-center gap-3">
+<div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-indigo-600 flex items-center justify-center shadow-lg shadow-primary/20">
+<span class="material-icons-outlined text-white text-lg">graphic_eq</span>
+</div>
+<h1 class="text-xl font-bold tracking-tight">Sonant</h1>
+</div>
+<nav class="space-y-1 flex-1">
+<button class="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg bg-primary text-white shadow-md shadow-primary/20 transition-all">
+<span class="material-icons-outlined text-[20px]">vpn_key</span>
+                    API Keys
+                </button>
+<button class="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-neutral-700 hover:text-slate-900 dark:hover:text-white transition-colors group">
+<span class="material-icons-outlined text-[20px] group-hover:text-primary transition-colors">piano</span>
+                    MIDI Settings
+                </button>
+<button class="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-neutral-700 hover:text-slate-900 dark:hover:text-white transition-colors group">
+<span class="material-icons-outlined text-[20px] group-hover:text-primary transition-colors">tune</span>
+                    General
+                </button>
+</nav>
+<div class="mt-auto pt-4 border-t border-slate-200 dark:border-neutral-600">
+<div class="flex items-center gap-3 px-2">
+<div class="w-8 h-8 rounded-full bg-slate-300 dark:bg-neutral-600 overflow-hidden">
+<img alt="User Avatar" class="w-full h-full object-cover" data-alt="User profile avatar placeholder" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCa2H2JVoq8J8hQiohoaW4GAaVR-eZIY8SDkqFpIj6-3_tdLVtR5IBSLAhQbKcajDQ_vTxgWHLsv7y0w7qxiKH0_5ZJMGmNEL0aah3ZGKSZh20eaWvbzZIkclrimKrfgHGpqd0SD0CoqV6lmAJ9A4Ys5XXZWpTCl4U2Jwknjx18-AB7Gqy_Sjto6MzcYBy8NfU-q0wuhprBU9a17o_HkoVfFqr05qjAKuJGQS0V_LyK9znh423oVLajbzNTXeYoblU580lXyZpwdQ"/>
+</div>
+<div class="text-xs">
+<p class="font-medium text-slate-900 dark:text-white">Pro License</p>
+<p class="text-slate-500 dark:text-neutral-400">v2.4.0</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col min-h-0 bg-white dark:bg-neutral-800">
+<!-- Header -->
+<header class="px-8 py-6 border-b border-slate-200 dark:border-neutral-600 flex justify-between items-center bg-white/50 dark:bg-neutral-800/50 backdrop-blur-sm sticky top-0 z-10">
+<div>
+<h2 class="text-2xl font-bold text-slate-900 dark:text-white">Provider Configuration</h2>
+<p class="text-sm text-slate-500 dark:text-neutral-400 mt-1">Manage API connections and model preferences.</p>
+</div>
+<div class="flex gap-2">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        System Online
+                   </span>
+</div>
+</header>
+<!-- Scrollable Content -->
+<div class="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+<!-- Anthropic Section -->
+<div class="group bg-slate-50 dark:bg-neutral-700/50 border border-slate-200 dark:border-neutral-600 rounded-xl p-6 hover:border-primary/50 transition-colors">
+<div class="flex items-start justify-between mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-white dark:bg-black border border-slate-200 dark:border-neutral-600 flex items-center justify-center p-1.5">
+<img alt="Anthropic Logo" class="w-full h-full object-contain dark:invert" data-alt="Anthropic provider logo" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCQuKZoc7v2w0LAuz0YT9E3EPq_-JJROIWTice8B3Z0Ckvkdpi4mqWJgvcvjWlMubYTUAvnvtcR1RAP70os0JUgQC6j8swOMQcwikE5Jn9y99R_EanvNU8pU2rAC9RRXTH8BjHG0iFjCem3XuPNgxV5rHlR8Y9NggOLwSlzZvwt5_-xURCbG38LZHBRFWRm_2V88XG34vD8B8gu880wepi6ZaunF6cj_tlEx_bvqeY38glNds-6ixVchRA684wmM9YXn_SHlL5bBA"/>
+</div>
+<div>
+<h3 class="font-semibold text-lg text-slate-900 dark:text-white">Anthropic</h3>
+<p class="text-xs text-slate-500 dark:text-neutral-400">Claude 3 Opus, Sonnet, Haiku</p>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+<span class="material-icons-outlined text-[14px]">check_circle</span>
+                                Connected
+                            </span>
+</div>
+</div>
+<div class="space-y-2">
+<label class="text-sm font-medium text-slate-700 dark:text-slate-300">API Key</label>
+<div class="flex gap-3">
+<div class="relative flex-1">
+<input class="w-full bg-white dark:bg-background-dark border border-slate-300 dark:border-neutral-600 text-slate-900 dark:text-white text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 pr-10 font-mono" placeholder="sk-ant-..." type="password" value="sk-ant-api03-xkjsd89234..."/>
+<button class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-primary transition-colors" type="button">
+<span class="material-icons-outlined text-lg">visibility_off</span>
+</button>
+</div>
+<button class="px-4 py-2.5 bg-white dark:bg-neutral-600 border border-slate-300 dark:border-neutral-500 text-slate-700 dark:text-white text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-neutral-500 hover:border-slate-400 dark:hover:border-neutral-400 focus:ring-2 focus:ring-primary/20 transition-all flex items-center gap-2 whitespace-nowrap">
+<span class="material-icons-outlined text-[18px]">wifi_tethering</span>
+                                Test
+                            </button>
+</div>
+</div>
+</div>
+<!-- OpenAI Section -->
+<div class="group bg-slate-50 dark:bg-neutral-700/50 border border-slate-200 dark:border-neutral-600 rounded-xl p-6 hover:border-primary/50 transition-colors">
+<div class="flex items-start justify-between mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-white dark:bg-black border border-slate-200 dark:border-neutral-600 flex items-center justify-center p-1.5">
+<svg class="fill-current text-slate-900 dark:text-white w-6 h-6" role="img" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.0462 6.0462 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1195 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7865a4.4944 4.4944 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.453l-.142.0805L8.704 5.4599a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"></path></svg>
+</div>
+<div>
+<h3 class="font-semibold text-lg text-slate-900 dark:text-white">OpenAI</h3>
+<p class="text-xs text-slate-500 dark:text-neutral-400">GPT-4, GPT-4o, GPT-3.5 Turbo</p>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
+<span class="material-icons-outlined text-[14px]">error_outline</span>
+                                Invalid Key
+                            </span>
+</div>
+</div>
+<div class="space-y-2">
+<label class="text-sm font-medium text-slate-700 dark:text-slate-300">API Key</label>
+<div class="flex gap-3">
+<div class="relative flex-1">
+<input class="w-full bg-white dark:bg-background-dark border border-rose-300 dark:border-rose-900/50 text-slate-900 dark:text-white text-sm rounded-lg focus:ring-rose-500 focus:border-rose-500 block p-2.5 pr-10 font-mono" placeholder="sk-..." type="password" value=""/>
+<button class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-primary transition-colors" type="button">
+<span class="material-icons-outlined text-lg">visibility_off</span>
+</button>
+</div>
+<button class="px-4 py-2.5 bg-white dark:bg-neutral-600 border border-slate-300 dark:border-neutral-500 text-slate-700 dark:text-white text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-neutral-500 hover:border-slate-400 dark:hover:border-neutral-400 focus:ring-2 focus:ring-primary/20 transition-all flex items-center gap-2 whitespace-nowrap">
+<span class="material-icons-outlined text-[18px]">wifi_tethering</span>
+                                Test
+                            </button>
+</div>
+<p class="text-xs text-rose-500 mt-1">Error: 401 Unauthorized. Please check your key.</p>
+</div>
+</div>
+<!-- Local/Custom Section -->
+<div class="group bg-slate-50 dark:bg-neutral-700/50 border border-slate-200 dark:border-neutral-600 rounded-xl p-6 hover:border-primary/50 transition-colors">
+<div class="flex items-start justify-between mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-white dark:bg-black border border-slate-200 dark:border-neutral-600 flex items-center justify-center p-1.5">
+<span class="material-icons-outlined text-slate-700 dark:text-slate-200">dns</span>
+</div>
+<div>
+<h3 class="font-semibold text-lg text-slate-900 dark:text-white">Local / Custom</h3>
+<p class="text-xs text-slate-500 dark:text-neutral-400">Ollama, LM Studio, Custom Endpoints</p>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20">
+<span class="material-icons-outlined text-[14px]">remove_circle_outline</span>
+                                Not Configured
+                            </span>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<div class="space-y-2">
+<label class="text-sm font-medium text-slate-700 dark:text-slate-300">Base URL</label>
+<input class="w-full bg-white dark:bg-background-dark border border-slate-300 dark:border-neutral-600 text-slate-900 dark:text-white text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 font-mono" placeholder="http://localhost:11434/v1" type="text"/>
+</div>
+<div class="space-y-2">
+<label class="text-sm font-medium text-slate-700 dark:text-slate-300">API Key (Optional)</label>
+<input class="w-full bg-white dark:bg-background-dark border border-slate-300 dark:border-neutral-600 text-slate-900 dark:text-white text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 font-mono" placeholder="Optional" type="password"/>
+</div>
+</div>
+<div class="mt-4 flex justify-end">
+<button class="px-4 py-2 bg-white dark:bg-neutral-600 border border-slate-300 dark:border-neutral-500 text-slate-700 dark:text-white text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-neutral-500 hover:border-slate-400 dark:hover:border-neutral-400 focus:ring-2 focus:ring-primary/20 transition-all flex items-center gap-2">
+<span class="material-icons-outlined text-[18px]">wifi_tethering</span>
+                            Test Endpoint
+                        </button>
+</div>
+</div>
+<hr class="border-slate-200 dark:border-neutral-600 my-6"/>
+<!-- Model Preferences -->
+<div class="space-y-4">
+<h3 class="text-lg font-semibold text-slate-900 dark:text-white">Model Preferences</h3>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+<div class="space-y-2">
+<label class="text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                                Default Model
+                                <span class="material-icons-outlined text-slate-400 text-sm cursor-help" title="The model used when Sonant first launches">info</span>
+</label>
+<div class="relative">
+<select class="w-full bg-white dark:bg-background-dark border border-slate-300 dark:border-neutral-600 text-slate-900 dark:text-white text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 appearance-none">
+<option value="claude-3-opus">Claude 3 Opus</option>
+<option selected="" value="claude-3-sonnet">Claude 3.5 Sonnet</option>
+<option value="gpt-4o">GPT-4o</option>
+<option value="gpt-4-turbo">GPT-4 Turbo</option>
+<option value="local-llama3">Llama 3 (Local)</option>
+</select>
+<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
+<span class="material-icons-outlined">expand_more</span>
+</div>
+</div>
+<p class="text-xs text-slate-500 dark:text-neutral-400">Selected model will be used for startup generation.</p>
+</div>
+<div class="space-y-2">
+<label class="text-sm font-medium text-slate-700 dark:text-slate-300">Context Window</label>
+<div class="relative">
+<select class="w-full bg-white dark:bg-background-dark border border-slate-300 dark:border-neutral-600 text-slate-900 dark:text-white text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 appearance-none">
+<option value="4k">4k Tokens</option>
+<option value="8k">8k Tokens</option>
+<option selected="" value="16k">16k Tokens</option>
+<option value="32k">32k Tokens</option>
+<option value="128k">128k Tokens (Max)</option>
+</select>
+<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
+<span class="material-icons-outlined">expand_more</span>
+</div>
+</div>
+<p class="text-xs text-slate-500 dark:text-neutral-400">Higher context allows for longer memory but costs more.</p>
+</div>
+</div>
+</div>
+<!-- Spacer for bottom scroll -->
+<div class="h-12"></div>
+</div>
+<!-- Footer Actions -->
+<footer class="p-6 border-t border-slate-200 dark:border-neutral-600 bg-slate-50 dark:bg-neutral-800 flex justify-end gap-3 rounded-br-xl">
+<button class="px-5 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-transparent border border-slate-300 dark:border-neutral-500 rounded-lg hover:bg-slate-50 dark:hover:bg-neutral-700 transition-colors">
+                    Cancel
+                </button>
+<button class="px-5 py-2.5 text-sm font-medium text-white bg-primary rounded-lg hover:bg-blue-700 shadow-lg shadow-primary/30 focus:ring-4 focus:ring-primary/20 transition-all flex items-center gap-2">
+<span class="material-icons-outlined text-[18px]">save</span>
+                    Save &amp; Close
+                </button>
+</footer>
+</main>
+</div>
+<!-- Background Decoration to show context -->
+<div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+<div class="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-primary/10 blur-[120px]"></div>
+<div class="absolute bottom-[-10%] left-[-5%] w-[500px] h-[500px] rounded-full bg-indigo-600/10 blur-[120px]"></div>
+</div>
+</body></html>

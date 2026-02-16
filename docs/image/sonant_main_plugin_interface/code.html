@@ -126,11 +126,6 @@
 </label>
 <div class="relative group">
 <textarea class="w-full h-24 bg-input-dark border border-border-dark rounded-lg p-3 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-none transition-all" placeholder="Describe the melody you want... e.g., 'A dark, melancholic arpeggio in the style of 80s synthwave with rising velocity.'"></textarea>
-<div class="absolute bottom-2 right-2">
-<button class="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
-<span class="material-icons text-sm">mic</span>
-</button>
-</div>
 </div>
 </div>
 <div class="space-y-2">
@@ -142,6 +137,23 @@
 <option>Bassline</option>
 <option>Percussion Pattern</option>
 <option>Drone / Texture</option>
+</select>
+<span class="material-icons absolute right-3 top-2.5 text-slate-400 pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="space-y-2">
+<label class="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                        AI Model
+                        <span class="material-icons text-xs text-slate-600 hover:text-slate-400 cursor-help">help_outline</span>
+</label>
+<div class="relative">
+<select class="w-full appearance-none bg-input-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-primary cursor-pointer">
+<option>Claude 3.5 Sonnet</option>
+<option>GPT-4o</option>
+<option>GPT-4 Turbo</option>
+<option>Opus-midi-xl</option>
+<option>Local (LLaMA 3 70B)</option>
+<option>Custom Endpoint...</option>
 </select>
 <span class="material-icons absolute right-3 top-2.5 text-slate-400 pointer-events-none">expand_more</span>
 </div>
@@ -493,5 +505,4 @@
 </div>
 </main>
 </div>
-
 </body></html>
