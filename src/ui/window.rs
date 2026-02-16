@@ -1211,6 +1211,39 @@ impl Render for SonantMainWindow {
                                     .map(|_| {
                                         let selected_channel = slot_channel;
                                         let live_summary = slot_live_summary;
+                                        let live_channel_button_row = |start: u8, end: u8| {
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .children((start..=end).map(|channel| {
+                                                    let disabled = self
+                                                        .live_channel_used_by_other_slots(slot, channel);
+                                                    let button = Button::new(
+                                                        Self::input_track_channel_button_id(
+                                                            slot, channel,
+                                                        ),
+                                                    )
+                                                    .label(if disabled {
+                                                        format!("{channel}*")
+                                                    } else {
+                                                        channel.to_string()
+                                                    })
+                                                    .disabled(disabled)
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _window, cx| {
+                                                            this.on_live_channel_selected(
+                                                                slot, channel, cx,
+                                                            )
+                                                        },
+                                                    ));
+                                                    if selected_channel == Some(channel) {
+                                                        button.primary()
+                                                    } else {
+                                                        button
+                                                    }
+                                                }))
+                                        };
                                         div()
                                             .flex()
                                             .flex_col()
@@ -1245,72 +1278,10 @@ impl Render for SonantMainWindow {
                                                 )),
                                             )
                                             .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .children((1..=8).map(|channel| {
-                                                        let channel = channel as u8;
-                                                        let disabled = self
-                                                            .live_channel_used_by_other_slots(slot, channel);
-                                                        let button = Button::new(
-                                                            Self::input_track_channel_button_id(
-                                                                slot, channel,
-                                                            ),
-                                                        )
-                                                        .label(if disabled {
-                                                            format!("{channel}*")
-                                                        } else {
-                                                            channel.to_string()
-                                                        })
-                                                        .disabled(disabled)
-                                                        .on_click(cx.listener(
-                                                            move |this, _, _window, cx| {
-                                                                this.on_live_channel_selected(
-                                                                    slot, channel, cx,
-                                                                )
-                                                            },
-                                                        ));
-                                                        if selected_channel == Some(channel) {
-                                                            button.primary()
-                                                        } else {
-                                                            button
-                                                        }
-                                                    })),
+                                                live_channel_button_row(1, 8),
                                             )
                                             .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .children((9..=16).map(|channel| {
-                                                        let channel = channel as u8;
-                                                        let disabled = self
-                                                            .live_channel_used_by_other_slots(slot, channel);
-                                                        let button = Button::new(
-                                                            Self::input_track_channel_button_id(
-                                                                slot, channel,
-                                                            ),
-                                                        )
-                                                        .label(if disabled {
-                                                            format!("{channel}*")
-                                                        } else {
-                                                            channel.to_string()
-                                                        })
-                                                        .disabled(disabled)
-                                                        .on_click(cx.listener(
-                                                            move |this, _, _window, cx| {
-                                                                this.on_live_channel_selected(
-                                                                    slot, channel, cx,
-                                                                )
-                                                            },
-                                                        ));
-                                                        if selected_channel == Some(channel) {
-                                                            button.primary()
-                                                        } else {
-                                                            button
-                                                        }
-                                                    })),
+                                                live_channel_button_row(9, 16),
                                             )
                                             .child(
                                                 div()
@@ -1342,46 +1313,33 @@ impl Render for SonantMainWindow {
                             .text_color(rgb(0x94a3b8))
                             .child("Toggle recording capture per MIDI Channel."),
                     )
-                    .child(
+                    .child({
+                        let recording_channel_button_row = |start: u8, end: u8| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .children((start..=end).map(|channel| {
+                                    let enabled = self.recording_enabled_for_channel(channel);
+                                    let button = Button::new(Self::recording_channel_button_id(channel))
+                                        .label(if enabled {
+                                            format!("Ch {channel} ON")
+                                        } else {
+                                            format!("Ch {channel} OFF")
+                                        })
+                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                            this.on_recording_channel_toggled(channel, cx)
+                                        }));
+                                    if enabled { button.primary() } else { button }
+                                }))
+                        };
                         div()
                             .flex()
-                            .items_center()
-                            .gap_1()
-                            .children((1..=8).map(|channel| {
-                                let channel = channel as u8;
-                                let enabled = self.recording_enabled_for_channel(channel);
-                                let button = Button::new(Self::recording_channel_button_id(channel))
-                                    .label(if enabled {
-                                        format!("Ch {channel} ON")
-                                    } else {
-                                        format!("Ch {channel} OFF")
-                                    })
-                                    .on_click(cx.listener(move |this, _, _window, cx| {
-                                        this.on_recording_channel_toggled(channel, cx)
-                                    }));
-                                if enabled { button.primary() } else { button }
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .children((9..=16).map(|channel| {
-                                let channel = channel as u8;
-                                let enabled = self.recording_enabled_for_channel(channel);
-                                let button = Button::new(Self::recording_channel_button_id(channel))
-                                    .label(if enabled {
-                                        format!("Ch {channel} ON")
-                                    } else {
-                                        format!("Ch {channel} OFF")
-                                    })
-                                    .on_click(cx.listener(move |this, _, _window, cx| {
-                                        this.on_recording_channel_toggled(channel, cx)
-                                    }));
-                                if enabled { button.primary() } else { button }
-                            })),
-                    ),
+                            .flex_col()
+                            .gap_2()
+                            .child(recording_channel_button_row(1, 8))
+                            .child(recording_channel_button_row(9, 16))
+                    }),
             )
             .child(Label::new("Reference Slot Overview"))
             .child(
