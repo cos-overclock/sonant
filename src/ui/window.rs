@@ -498,21 +498,12 @@ impl Render for SonantMainWindow {
         let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
         let mode_requirement_satisfied =
             mode_reference_requirement_satisfied(self.selected_generation_mode, &references);
-        let selected_slot_reference = references
+        let selected_slot_references: Vec<&_> = references
             .iter()
-            .find(|reference| reference.slot == self.selected_reference_slot);
-        let selected_slot_file_path = selected_slot_reference
-            .as_ref()
-            .and_then(|reference| reference.file.as_ref())
-            .map(|file| file.path.clone());
-        let selected_slot_file_label = selected_slot_file_path
-            .as_deref()
-            .map(display_file_name_from_path)
-            .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
-        let selected_slot_stats = selected_slot_reference
-            .as_ref()
-            .map(|reference| format!("Bars: {} / Notes: {}", reference.bars, reference.note_count));
-        let selected_slot_set = selected_slot_reference.is_some();
+            .filter(|reference| reference.slot == self.selected_reference_slot)
+            .collect();
+        let selected_slot_reference_count = selected_slot_references.len();
+        let selected_slot_set = selected_slot_reference_count > 0;
         let selected_slot_error = self
             .midi_slot_error_for_slot(self.selected_reference_slot)
             .cloned();
@@ -691,17 +682,11 @@ impl Render for SonantMainWindow {
                     .flex_col()
                     .gap_2()
                     .children(Self::reference_slots().iter().copied().map(|slot| {
-                        let reference = references.iter().find(|reference| reference.slot == slot);
-                        let slot_file_path = reference
-                            .and_then(|reference| reference.file.as_ref())
-                            .map(|file| file.path.clone());
-                        let slot_file_label = slot_file_path
-                            .as_deref()
-                            .map(display_file_name_from_path)
-                            .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
-                        let slot_stats = reference.map(|reference| {
-                            format!("Bars: {} / Notes: {}", reference.bars, reference.note_count)
-                        });
+                        let slot_references: Vec<&_> = references
+                            .iter()
+                            .filter(|reference| reference.slot == slot)
+                            .collect();
+                        let slot_reference_count = slot_references.len();
                         div()
                             .flex()
                             .flex_col()
@@ -719,16 +704,40 @@ impl Render for SonantMainWindow {
                                 rgb(0x0f172a)
                             })
                             .child(div().text_color(rgb(0x93c5fd)).child(Self::reference_slot_label(slot)))
-                            .child(div().child(format!("File: {slot_file_label}")))
+                            .child(div().child(format!("Registered MIDI: {slot_reference_count}")))
                             .children(
-                                slot_stats
-                                    .iter()
-                                    .map(|stats| div().text_color(rgb(0x93c5fd)).child(stats.clone())),
+                                std::iter::once(slot_reference_count)
+                                    .filter(|count| *count == 0)
+                                    .map(|_| div().child(format!("File: {MIDI_SLOT_EMPTY_LABEL}"))),
                             )
                             .children(
-                                slot_file_path
+                                slot_references
                                     .iter()
-                                    .map(|path| div().text_color(rgb(0x94a3b8)).child(path.clone())),
+                                    .enumerate()
+                                    .map(|(index, reference)| {
+                                        let slot_file_path = reference
+                                            .file
+                                            .as_ref()
+                                            .map(|file| file.path.clone())
+                                            .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
+                                        let slot_file_label = display_file_name_from_path(&slot_file_path);
+                                        let slot_stats = format!(
+                                            "Bars: {} / Notes: {}",
+                                            reference.bars, reference.note_count
+                                        );
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div().text_color(rgb(0x93c5fd)).child(format!(
+                                                    "#{}: {slot_file_label}",
+                                                    index + 1
+                                                )),
+                                            )
+                                            .child(div().text_color(rgb(0x93c5fd)).child(slot_stats))
+                                            .child(div().text_color(rgb(0x94a3b8)).child(slot_file_path))
+                                    }),
                             )
                     })),
             )
@@ -761,18 +770,45 @@ impl Render for SonantMainWindow {
                         this.on_midi_slot_drop(paths, cx)
                     }))
                     .child(div().child(format!(
-                        "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label}."
+                        "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label} (appends to this slot)."
                     )))
-                    .child(div().child(format!("File: {selected_slot_file_label}")))
+                    .child(div().child(format!(
+                        "Registered MIDI in slot: {selected_slot_reference_count}"
+                    )))
                     .children(
-                        selected_slot_stats
-                            .iter()
-                            .map(|stats| div().text_color(rgb(0x93c5fd)).child(stats.clone())),
+                        std::iter::once(selected_slot_reference_count)
+                            .filter(|count| *count == 0)
+                            .map(|_| div().child(format!("File: {MIDI_SLOT_EMPTY_LABEL}"))),
                     )
                     .children(
-                        selected_slot_file_path
+                        selected_slot_references
                             .iter()
-                            .map(|path| div().text_color(rgb(0x94a3b8)).child(path.clone())),
+                            .enumerate()
+                            .map(|(index, reference)| {
+                                let slot_file_path = reference
+                                    .file
+                                    .as_ref()
+                                    .map(|file| file.path.clone())
+                                    .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
+                                let slot_file_label = display_file_name_from_path(&slot_file_path);
+                                let slot_stats =
+                                    format!("Bars: {} / Notes: {}", reference.bars, reference.note_count);
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .p_2()
+                                    .border_1()
+                                    .border_color(rgb(0x334155))
+                                    .bg(rgb(0x111827))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0x93c5fd))
+                                            .child(format!("#{}: {slot_file_label}", index + 1)),
+                                    )
+                                    .child(div().text_color(rgb(0x93c5fd)).child(slot_stats))
+                                    .child(div().text_color(rgb(0x94a3b8)).child(slot_file_path))
+                            }),
                     )
                     .child(
                         div()
@@ -788,7 +824,7 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 Button::new("midi-slot-clear-button")
-                                    .label("Clear")
+                                    .label("Clear Slot")
                                     .disabled(!selected_slot_set)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.on_clear_midi_slot_clicked(cx)
