@@ -97,10 +97,10 @@ impl RtMidiEvent {
     }
 }
 
-fn map_input_event(event: &UnknownEvent) -> Option<RtMidiEvent> {
+fn map_input_event(event: &UnknownEvent, allow_note_events: bool) -> Option<RtMidiEvent> {
     match event.as_core_event() {
         Some(CoreEventSpace::Midi(event)) => Some(RtMidiEvent::from_midi(event)),
-        Some(CoreEventSpace::NoteOn(event)) => note_event_to_midi(
+        Some(CoreEventSpace::NoteOn(event)) if allow_note_events => note_event_to_midi(
             event.time(),
             event.port_index(),
             event.channel(),
@@ -108,7 +108,7 @@ fn map_input_event(event: &UnknownEvent) -> Option<RtMidiEvent> {
             event.velocity(),
             true,
         ),
-        Some(CoreEventSpace::NoteOff(event)) => note_event_to_midi(
+        Some(CoreEventSpace::NoteOff(event)) if allow_note_events => note_event_to_midi(
             event.time(),
             event.port_index(),
             event.channel(),
@@ -116,7 +116,7 @@ fn map_input_event(event: &UnknownEvent) -> Option<RtMidiEvent> {
             event.velocity(),
             false,
         ),
-        Some(CoreEventSpace::NoteChoke(event)) => note_event_to_midi(
+        Some(CoreEventSpace::NoteChoke(event)) if allow_note_events => note_event_to_midi(
             event.time(),
             event.port_index(),
             event.channel(),
@@ -126,6 +126,10 @@ fn map_input_event(event: &UnknownEvent) -> Option<RtMidiEvent> {
         ),
         _ => None,
     }
+}
+
+fn should_accept_note_events<'a>(mut events: impl Iterator<Item = &'a UnknownEvent>) -> bool {
+    !events.any(|event| matches!(event.as_core_event(), Some(CoreEventSpace::Midi(_))))
 }
 
 fn note_event_to_midi(
@@ -313,9 +317,13 @@ impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
         _audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
+        // Some hosts can emit both MIDI and Note events for the same performance data.
+        // Prefer raw MIDI when present to avoid double-counting live notes.
+        let allow_note_events = should_accept_note_events(events.input.iter());
+
         let mut received_live_input = false;
         for event in events.input.iter() {
-            if let Some(midi_event) = map_input_event(event) {
+            if let Some(midi_event) = map_input_event(event, allow_note_events) {
                 self.midi_bridge.push_live_input(midi_event);
                 received_live_input = true;
             }
@@ -364,7 +372,7 @@ mod tests {
     #[test]
     fn map_input_event_converts_note_events_to_midi() {
         let note_on = NoteOnEvent::new(12, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.5);
-        let mapped_on = map_input_event(note_on.as_ref()).expect("note on should convert");
+        let mapped_on = map_input_event(note_on.as_ref(), true).expect("note on should convert");
         assert_eq!(
             mapped_on,
             RtMidiEvent {
@@ -375,7 +383,7 @@ mod tests {
         );
 
         let note_off = NoteOffEvent::new(15, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.25);
-        let mapped_off = map_input_event(note_off.as_ref()).expect("note off should convert");
+        let mapped_off = map_input_event(note_off.as_ref(), true).expect("note off should convert");
         assert_eq!(
             mapped_off,
             RtMidiEvent {
@@ -391,13 +399,20 @@ mod tests {
         let wildcard_note =
             NoteOnEvent::new(0, Pckn::new(Match::<u16>::All, 1u16, 64u16, 0u32), 1.0);
 
-        assert!(map_input_event(wildcard_note.as_ref()).is_none());
+        assert!(map_input_event(wildcard_note.as_ref(), true).is_none());
+    }
+
+    #[test]
+    fn map_input_event_ignores_note_events_when_disabled() {
+        let note_on = NoteOnEvent::new(12, Pckn::new(0u16, 2u16, 64u16, 0u32), 0.5);
+        assert!(map_input_event(note_on.as_ref(), false).is_none());
     }
 
     #[test]
     fn map_input_event_passes_through_midi_events() {
         let midi_event = MidiEvent::new(8, 1, [0x90, 60, 100]);
-        let mapped = map_input_event(midi_event.as_ref()).expect("midi events should pass through");
+        let mapped =
+            map_input_event(midi_event.as_ref(), true).expect("midi events should pass through");
 
         assert_eq!(
             mapped,
@@ -407,6 +422,22 @@ mod tests {
                 data: [0x90, 60, 100],
             }
         );
+    }
+
+    #[test]
+    fn should_accept_note_events_is_false_when_midi_exists() {
+        let midi_event = MidiEvent::new(0, 0, [0x90, 64, 100]);
+        let note_on = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 64u16, 0u32), 0.8);
+        let events = [midi_event.as_ref(), note_on.as_ref()];
+        assert!(!should_accept_note_events(events.into_iter()));
+    }
+
+    #[test]
+    fn should_accept_note_events_is_true_when_no_midi_exists() {
+        let note_on = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 64u16, 0u32), 0.8);
+        let note_off = NoteOffEvent::new(10, Pckn::new(0u16, 0u16, 64u16, 0u32), 0.0);
+        let events = [note_on.as_ref(), note_off.as_ref()];
+        assert!(should_accept_note_events(events.into_iter()));
     }
 
     #[test]
