@@ -583,6 +583,31 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duplicate_slot_mapping() {
+        let router = MidiInputRouter::new();
+
+        let error = router
+            .update_channel_mapping(vec![
+                ChannelMapping {
+                    slot: ReferenceSlot::Melody,
+                    channel: 1,
+                },
+                ChannelMapping {
+                    slot: ReferenceSlot::Melody,
+                    channel: 2,
+                },
+            ])
+            .expect_err("duplicate slot mapping should be rejected");
+
+        assert_eq!(
+            error,
+            MidiInputRouterError::DuplicateSlotMapping {
+                slot: ReferenceSlot::Melody,
+            }
+        );
+    }
+
+    #[test]
     fn rejects_out_of_range_recording_channel() {
         let router = MidiInputRouter::new();
 
