@@ -15,8 +15,8 @@ use gpui_component::{
 use sonant::{
     app::{
         ChannelMapping, GenerationJobManager, GenerationJobState, GenerationJobUpdate,
-        InputTrackModel, LiveInputEvent, LiveInputEventSource, LiveMidiCapture, LoadMidiCommand,
-        LoadMidiUseCase, MidiInputRouter,
+        InputTrackModel, LIVE_INPUT_IPC_SOCKET_ENV, LiveInputEvent, LiveInputEventSource,
+        LiveInputIpcSource, LiveMidiCapture, LoadMidiCommand, LoadMidiUseCase, MidiInputRouter,
     },
     domain::{
         GenerationMode, LlmError, ReferenceSlot, ReferenceSource, has_supported_midi_extension,
@@ -95,7 +95,8 @@ impl SonantMainWindow {
         let backend = build_generation_backend();
         let input_track_model = InputTrackModel::new();
         let recording_channel_enabled = [false; 16];
-        let live_midi_capture = LiveMidiCapture::new(Arc::new(NoopLiveInputSource));
+        let (live_input_source, live_input_error) = resolve_live_input_source();
+        let live_midi_capture = LiveMidiCapture::new(live_input_source);
         let midi_input_router = MidiInputRouter::new();
 
         let mut this = Self {
@@ -116,7 +117,7 @@ impl SonantMainWindow {
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             api_key_error: None,
-            input_track_error: None,
+            input_track_error: live_input_error,
             midi_slot_errors: Vec::new(),
             active_test_api_key: None,
             startup_notice: backend.startup_notice,
@@ -792,6 +793,21 @@ struct NoopLiveInputSource;
 impl LiveInputEventSource for NoopLiveInputSource {
     fn try_pop_live_input_event(&self) -> Option<LiveInputEvent> {
         None
+    }
+}
+
+fn resolve_live_input_source() -> (Arc<dyn LiveInputEventSource>, Option<String>) {
+    let Ok(socket_path) = std::env::var(LIVE_INPUT_IPC_SOCKET_ENV) else {
+        return (Arc::new(NoopLiveInputSource), None);
+    };
+    match LiveInputIpcSource::bind(&socket_path) {
+        Ok(source) => (Arc::new(source), None),
+        Err(error) => (
+            Arc::new(NoopLiveInputSource),
+            Some(format!(
+                "Live input socket could not be opened ({socket_path}): {error}"
+            )),
+        ),
     }
 }
 

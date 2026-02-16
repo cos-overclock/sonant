@@ -1,6 +1,7 @@
 mod generation_job_manager;
 mod generation_service;
 mod input_track_model;
+mod live_input_ipc;
 mod live_midi_capture;
 mod load_midi_use_case;
 mod midi_input_router;
@@ -10,6 +11,7 @@ pub use generation_service::{GenerationRetryConfig, GenerationService};
 pub use input_track_model::{
     ChannelMapping, InputTrackModel, InputTrackModelError, default_live_channel_mappings,
 };
+pub use live_input_ipc::{LIVE_INPUT_IPC_SOCKET_ENV, LiveInputIpcSender, LiveInputIpcSource};
 pub use live_midi_capture::{
     LiveInputEvent, LiveInputEventSource, LiveMidiCapture, LiveMidiCaptureConfigError,
 };

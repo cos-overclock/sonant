@@ -87,6 +87,14 @@ impl RtMidiEvent {
     fn to_clap(self) -> MidiEvent {
         MidiEvent::new(self.time, self.port_index, self.data)
     }
+
+    fn to_app_live_input(self) -> crate::app::LiveInputEvent {
+        crate::app::LiveInputEvent {
+            time: self.time,
+            port_index: self.port_index,
+            data: self.data,
+        }
+    }
 }
 
 fn map_input_event(event: &UnknownEvent) -> Option<RtMidiEvent> {
@@ -217,10 +225,13 @@ impl SonantShared {
         self.midi_bridge.reset();
     }
 
-    fn flush_live_input_to_app(&self) {
+    fn flush_live_input_to_app(&self) -> Vec<crate::app::LiveInputEvent> {
+        let mut flushed_events = Vec::new();
         while let Some(event) = self.midi_bridge.pop_live_input() {
             self.midi_bridge.push_app_input(event);
+            flushed_events.push(event.to_app_live_input());
         }
+        flushed_events
     }
 
     pub fn pop_live_input_event(&self) -> Option<LiveInputEvent> {
@@ -268,7 +279,8 @@ pub struct SonantPluginMainThread<'a> {
 
 impl<'a> PluginMainThread<'a, SonantShared> for SonantPluginMainThread<'a> {
     fn on_main_thread(&mut self) {
-        self.shared.flush_live_input_to_app();
+        let live_input_events = self.shared.flush_live_input_to_app();
+        self.gui.send_live_input_events(&live_input_events);
     }
 }
 
