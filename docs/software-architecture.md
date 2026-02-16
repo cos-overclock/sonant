@@ -101,9 +101,9 @@ Local resources:
 
 ### 6.2 参照MIDIあり生成（UP-2/UP-3）
 
-- `MidiLoader` でMIDI読み込み
+- `MidiLoader` でMIDIを読み込み、参照サマリ（小節数/ノート数/音域）とイベント列を抽出
 - `MidiAnalyzer` がテンポ/キー推定、リズム特徴抽出
-- `PromptBuilder` が参照特徴を付加してLLMに送信
+- `PromptBuilder` が参照特徴に加え、参照MIDIイベント列を `GenerationRequest.references` に含めてLLMに送信
 - 続き生成時は `ContinuationPolicy` が既存末尾と接続整合性を検証
 
 ### 6.3 リアルタイムMIDI入力あり生成
