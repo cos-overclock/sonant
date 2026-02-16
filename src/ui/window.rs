@@ -560,18 +560,32 @@ impl SonantMainWindow {
     }
 
     fn route_live_events_to_router(&mut self, events: Vec<LiveInputEvent>) {
+        let mut routable_events = Vec::with_capacity(events.len());
+        let mut last_transport_state = None;
+
         for event in events {
-            self.live_capture_transport_playing = event.is_transport_playing;
-            self.live_capture_playhead_ppq = event.playhead_ppq;
-            self.midi_input_router.update_transport_state(
-                self.live_capture_transport_playing,
-                self.live_capture_playhead_ppq,
-            );
+            last_transport_state = Some((event.is_transport_playing, event.playhead_ppq));
 
             let Some(channel) = midi_channel_from_status(event.data[0]) else {
                 continue;
             };
-            self.midi_input_router.push_live_event(channel, event);
+            routable_events.push((channel, event));
+        }
+
+        let last_routable_transport_state = routable_events
+            .last()
+            .map(|(_channel, event)| (event.is_transport_playing, event.playhead_ppq));
+
+        self.midi_input_router
+            .push_live_events_with_transport(&routable_events);
+
+        if let Some((is_transport_playing, playhead_ppq)) = last_transport_state {
+            self.live_capture_transport_playing = is_transport_playing;
+            self.live_capture_playhead_ppq = playhead_ppq;
+            if Some((is_transport_playing, playhead_ppq)) != last_routable_transport_state {
+                self.midi_input_router
+                    .update_transport_state(is_transport_playing, playhead_ppq);
+            }
         }
     }
 
