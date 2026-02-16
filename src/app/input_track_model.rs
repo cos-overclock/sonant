@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
@@ -6,8 +6,6 @@ use crate::domain::{ReferenceSlot, ReferenceSource};
 
 pub const MIDI_CHANNEL_MIN: u8 = 1;
 pub const MIDI_CHANNEL_MAX: u8 = 16;
-
-const REFERENCE_SLOT_COUNT: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelMapping {
@@ -47,7 +45,7 @@ pub enum InputTrackModelError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputTrackModel {
-    slot_sources: [ReferenceSource; REFERENCE_SLOT_COUNT],
+    slot_sources: HashMap<ReferenceSlot, ReferenceSource>,
     channel_mappings: Vec<ChannelMapping>,
 }
 
@@ -57,7 +55,7 @@ impl InputTrackModel {
     }
 
     pub fn source_for_slot(&self, slot: ReferenceSlot) -> ReferenceSource {
-        self.slot_sources[slot_index(slot)]
+        source_for_slot(&self.slot_sources, slot)
     }
 
     pub fn set_source_for_slot(
@@ -65,13 +63,12 @@ impl InputTrackModel {
         slot: ReferenceSlot,
         source: ReferenceSource,
     ) -> Result<(), InputTrackModelError> {
-        let index = slot_index(slot);
-        let previous_source = self.slot_sources[index];
-        self.slot_sources[index] = source;
+        let previous_source = self.source_for_slot(slot);
+        set_slot_source(&mut self.slot_sources, slot, source);
 
         if let Err(err) = validate_channel_mappings(&self.slot_sources, &self.channel_mappings) {
             // Revert the change if validation fails to avoid leaving the model in an invalid state.
-            self.slot_sources[index] = previous_source;
+            set_slot_source(&mut self.slot_sources, slot, previous_source);
             return Err(err);
         }
 
@@ -123,7 +120,7 @@ impl InputTrackModel {
 impl Default for InputTrackModel {
     fn default() -> Self {
         Self {
-            slot_sources: [ReferenceSource::File; REFERENCE_SLOT_COUNT],
+            slot_sources: HashMap::new(),
             channel_mappings: default_live_channel_mappings(),
         }
     }
@@ -151,20 +148,18 @@ pub fn default_live_channel_mappings() -> Vec<ChannelMapping> {
 }
 
 fn validate_channel_mappings(
-    slot_sources: &[ReferenceSource; REFERENCE_SLOT_COUNT],
+    slot_sources: &HashMap<ReferenceSlot, ReferenceSource>,
     channel_mappings: &[ChannelMapping],
 ) -> Result<(), InputTrackModelError> {
-    let mut has_mapping_for_slot = [false; REFERENCE_SLOT_COUNT];
+    let mut has_mapping_for_slot = HashSet::new();
     let mut live_channel_slots = HashMap::new();
 
     for mapping in channel_mappings {
         mapping.validate()?;
 
-        let slot_index = slot_index(mapping.slot);
-        if has_mapping_for_slot[slot_index] {
+        if !has_mapping_for_slot.insert(mapping.slot) {
             return Err(InputTrackModelError::DuplicateSlotMapping { slot: mapping.slot });
         }
-        has_mapping_for_slot[slot_index] = true;
 
         if source_for_slot(slot_sources, mapping.slot) != ReferenceSource::Live {
             continue;
@@ -185,21 +180,24 @@ fn validate_channel_mappings(
 }
 
 fn source_for_slot(
-    slot_sources: &[ReferenceSource; REFERENCE_SLOT_COUNT],
+    slot_sources: &HashMap<ReferenceSlot, ReferenceSource>,
     slot: ReferenceSlot,
 ) -> ReferenceSource {
-    slot_sources[slot_index(slot)]
+    slot_sources
+        .get(&slot)
+        .copied()
+        .unwrap_or(ReferenceSource::File)
 }
 
-fn slot_index(slot: ReferenceSlot) -> usize {
-    match slot {
-        ReferenceSlot::Melody => 0,
-        ReferenceSlot::ChordProgression => 1,
-        ReferenceSlot::DrumPattern => 2,
-        ReferenceSlot::Bassline => 3,
-        ReferenceSlot::CounterMelody => 4,
-        ReferenceSlot::Harmony => 5,
-        ReferenceSlot::ContinuationSeed => 6,
+fn set_slot_source(
+    slot_sources: &mut HashMap<ReferenceSlot, ReferenceSource>,
+    slot: ReferenceSlot,
+    source: ReferenceSource,
+) {
+    if source == ReferenceSource::File {
+        slot_sources.remove(&slot);
+    } else {
+        slot_sources.insert(slot, source);
     }
 }
 
