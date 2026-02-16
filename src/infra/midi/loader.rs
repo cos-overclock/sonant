@@ -405,6 +405,14 @@ mod tests {
     }
 
     #[test]
+    fn load_midi_summary_fails_when_file_is_missing() {
+        let missing_path = std::env::temp_dir().join("sonant-midi-loader-missing-file.mid");
+        let err = load_midi_summary(&missing_path).expect_err("missing file must fail");
+
+        assert!(matches!(err, MidiLoadError::Io { .. }));
+    }
+
+    #[test]
     fn load_midi_summary_fails_on_corrupted_file() {
         let midi_file = write_bytes_file("mid", &[0x00, 0x01, 0x02, 0x03]);
         let err = load_midi_summary(midi_file.path()).expect_err("corrupted midi must fail");
