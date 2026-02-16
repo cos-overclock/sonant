@@ -16,7 +16,8 @@ use sonant::{
     app::{
         ChannelMapping, GenerationJobManager, GenerationJobState, GenerationJobUpdate,
         InputTrackModel, LIVE_INPUT_IPC_SOCKET_ENV, LiveInputEvent, LiveInputEventSource,
-        LiveInputIpcSource, LiveMidiCapture, LoadMidiCommand, LoadMidiUseCase, MidiInputRouter,
+        LiveInputIpcSource, LiveMidiCapture, LoadMidiCommand, LoadMidiUseCase, MIDI_CHANNEL_MAX,
+        MIDI_CHANNEL_MIN, MidiInputRouter,
     },
     domain::{
         GenerationMode, LlmError, ReferenceSlot, ReferenceSource, has_supported_midi_extension,
@@ -42,8 +43,6 @@ use super::{
     PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
 };
 
-const MIDI_CHANNEL_MIN: u8 = 1;
-const MIDI_CHANNEL_MAX: u8 = 16;
 const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
 const LIVE_CAPTURE_MAX_EVENTS_PER_POLL: usize = 512;
 
