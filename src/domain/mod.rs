@@ -1,5 +1,6 @@
 mod errors;
 mod generation_contract;
+mod midi_path;
 
 pub use errors::{LlmError, LlmErrorCategory};
 pub use generation_contract::{
@@ -7,3 +8,4 @@ pub use generation_contract::{
     GenerationParams, GenerationRequest, GenerationResult, GenerationUsage, MidiReferenceEvent,
     MidiReferenceSummary, ModelRef, ReferenceSlot, ReferenceSource,
 };
+pub use midi_path::has_supported_midi_extension;

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
-use super::LlmError;
+use super::{LlmError, has_supported_midi_extension};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRef {
@@ -269,13 +268,6 @@ impl GenerationRequest {
 
 fn default_variation_count() -> u8 {
     1
-}
-
-fn has_supported_midi_extension(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
