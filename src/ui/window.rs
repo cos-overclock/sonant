@@ -10,6 +10,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
     label::Label,
+    scroll::ScrollableElement,
 };
 use sonant::{
     app::{
@@ -542,6 +543,8 @@ impl Render for SonantMainWindow {
 
         div()
             .size_full()
+            .overflow_y_scrollbar()
+            .overflow_x_hidden()
             .flex()
             .flex_col()
             .gap_3()
