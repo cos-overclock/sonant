@@ -297,6 +297,59 @@ mod tests {
     }
 
     #[test]
+    fn load_midi_summary_defaults_to_four_four_when_time_signature_missing() {
+        let smf = Smf {
+            header: Header::new(Format::SingleTrack, Timing::Metrical(u15::new(96))),
+            tracks: vec![vec![
+                TrackEvent {
+                    delta: u28::new(0),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::new(0),
+                        message: MidiMessage::NoteOn {
+                            key: u7::new(60),
+                            vel: u7::new(100),
+                        },
+                    },
+                },
+                TrackEvent {
+                    delta: u28::new(192),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::new(0),
+                        message: MidiMessage::NoteOff {
+                            key: u7::new(60),
+                            vel: u7::new(0),
+                        },
+                    },
+                },
+                TrackEvent {
+                    delta: u28::new(193),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::new(0),
+                        message: MidiMessage::NoteOn {
+                            key: u7::new(64),
+                            vel: u7::new(96),
+                        },
+                    },
+                },
+                TrackEvent {
+                    delta: u28::new(0),
+                    kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+                },
+            ]],
+        };
+
+        let midi_file = write_midi_file("mid", smf);
+        let summary = load_midi_summary(midi_file.path()).expect("valid midi should load");
+
+        // Without an explicit time-signature event, loader should use default 4/4.
+        // At 96 TPQ, one bar is 384 ticks, and max tick 385 should map to 2 bars.
+        assert_eq!(summary.bars, 2);
+        assert_eq!(summary.note_count, 2);
+        assert_eq!(summary.min_pitch, 60);
+        assert_eq!(summary.max_pitch, 64);
+    }
+
+    #[test]
     fn load_midi_reference_extracts_all_track_events() {
         let smf = Smf {
             header: Header::new(Format::SingleTrack, Timing::Metrical(u15::new(96))),
