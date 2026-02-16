@@ -298,6 +298,10 @@ mod tests {
         let melody = mode_reference_requirement(GenerationMode::Melody);
         assert_eq!(melody.description, "Reference MIDI: Optional.");
         assert_eq!(melody.unmet_message, None);
+
+        let bassline = mode_reference_requirement(GenerationMode::Bassline);
+        assert_eq!(bassline.description, "Reference MIDI: Optional.");
+        assert_eq!(bassline.unmet_message, None);
     }
 
     #[test]
@@ -311,6 +315,10 @@ mod tests {
 
         assert!(mode_reference_requirement_satisfied(
             GenerationMode::Melody,
+            &no_references
+        ));
+        assert!(mode_reference_requirement_satisfied(
+            GenerationMode::Bassline,
             &no_references
         ));
         assert!(!mode_reference_requirement_satisfied(

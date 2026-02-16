@@ -91,17 +91,12 @@ pub(super) struct ModeReferenceRequirement {
 
 pub(super) fn mode_reference_requirement(mode: GenerationMode) -> ModeReferenceRequirement {
     match mode {
-        GenerationMode::Melody | GenerationMode::ChordProgression | GenerationMode::DrumPattern => {
-            ModeReferenceRequirement {
-                description: "Reference MIDI: Optional.",
-                unmet_message: None,
-            }
-        }
-        GenerationMode::Bassline => ModeReferenceRequirement {
-            description: "Reference MIDI required: Melody or Chord Progression.",
-            unmet_message: Some(
-                "Bassline mode requires a Melody or Chord Progression reference MIDI.",
-            ),
+        GenerationMode::Melody
+        | GenerationMode::ChordProgression
+        | GenerationMode::DrumPattern
+        | GenerationMode::Bassline => ModeReferenceRequirement {
+            description: "Reference MIDI: Optional.",
+            unmet_message: None,
         },
         GenerationMode::CounterMelody => ModeReferenceRequirement {
             description: "Reference MIDI required: Melody.",
@@ -127,15 +122,10 @@ pub(super) fn mode_reference_requirement_satisfied(
     references: &[MidiReferenceSummary],
 ) -> bool {
     match mode {
-        GenerationMode::Melody | GenerationMode::ChordProgression | GenerationMode::DrumPattern => {
-            true
-        }
-        GenerationMode::Bassline => references.iter().any(|reference| {
-            matches!(
-                reference.slot,
-                ReferenceSlot::Melody | ReferenceSlot::ChordProgression
-            )
-        }),
+        GenerationMode::Melody
+        | GenerationMode::ChordProgression
+        | GenerationMode::DrumPattern
+        | GenerationMode::Bassline => true,
         GenerationMode::CounterMelody | GenerationMode::Harmony => references
             .iter()
             .any(|reference| reference.slot == ReferenceSlot::Melody),
