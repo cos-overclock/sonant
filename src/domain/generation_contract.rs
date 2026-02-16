@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use super::LlmError;
 
@@ -103,10 +104,46 @@ pub enum ReferenceSource {
     Live,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceSlot {
+    Melody,
+    ChordProgression,
+    DrumPattern,
+    Bassline,
+    CounterMelody,
+    Harmony,
+    ContinuationSeed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileReferenceInput {
+    pub path: String,
+}
+
+impl FileReferenceInput {
+    pub fn validate(&self) -> Result<(), LlmError> {
+        let path = self.path.trim();
+        if path.is_empty() {
+            return Err(LlmError::validation(
+                "reference file path must not be empty",
+            ));
+        }
+        if !has_supported_midi_extension(path) {
+            return Err(LlmError::validation(format!(
+                "reference file path must end with .mid or .midi (got {path})"
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MidiReferenceSummary {
-    pub slot: String,
+    pub slot: ReferenceSlot,
     pub source: ReferenceSource,
+    #[serde(default)]
+    pub file: Option<FileReferenceInput>,
     pub bars: u16,
     pub note_count: u32,
     pub density_hint: f32,
@@ -116,8 +153,20 @@ pub struct MidiReferenceSummary {
 
 impl MidiReferenceSummary {
     pub fn validate(&self) -> Result<(), LlmError> {
-        if self.slot.trim().is_empty() {
-            return Err(LlmError::validation("reference slot must not be empty"));
+        match self.source {
+            ReferenceSource::File => {
+                let file = self.file.as_ref().ok_or_else(|| {
+                    LlmError::validation("reference file source requires file metadata")
+                })?;
+                file.validate()?;
+            }
+            ReferenceSource::Live => {
+                if self.file.is_some() {
+                    return Err(LlmError::validation(
+                        "reference file metadata must be empty for live source",
+                    ));
+                }
+            }
         }
         if self.bars == 0 {
             return Err(LlmError::validation(
@@ -191,6 +240,13 @@ impl GenerationRequest {
 
 fn default_variation_count() -> u8 {
     1
+}
+
+fn has_supported_midi_extension(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -416,6 +472,70 @@ mod tests {
             request.validate(),
             Err(LlmError::Validation { message })
             if message == "continuation mode requires at least one MIDI reference"
+        ));
+    }
+
+    #[test]
+    fn reference_validation_requires_file_metadata_for_file_source() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: None,
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(matches!(
+            reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "reference file source requires file metadata"
+        ));
+    }
+
+    #[test]
+    fn reference_validation_rejects_non_midi_file_extension() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.wav".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(matches!(
+            reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "reference file path must end with .mid or .midi (got melody_reference.wav)"
+        ));
+    }
+
+    #[test]
+    fn reference_validation_rejects_file_metadata_for_live_source() {
+        let reference = MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::Live,
+            file: Some(FileReferenceInput {
+                path: "melody_reference.mid".to_string(),
+            }),
+            bars: 4,
+            note_count: 24,
+            density_hint: 0.5,
+            min_pitch: 60,
+            max_pitch: 72,
+        };
+
+        assert!(matches!(
+            reference.validate(),
+            Err(LlmError::Validation { message })
+            if message == "reference file metadata must be empty for live source"
         ));
     }
 
