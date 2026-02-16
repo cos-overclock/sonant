@@ -318,6 +318,14 @@ mod tests {
             &no_references
         ));
         assert!(mode_reference_requirement_satisfied(
+            GenerationMode::ChordProgression,
+            &no_references
+        ));
+        assert!(mode_reference_requirement_satisfied(
+            GenerationMode::DrumPattern,
+            &no_references
+        ));
+        assert!(mode_reference_requirement_satisfied(
             GenerationMode::Bassline,
             &no_references
         ));

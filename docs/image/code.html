@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Sonant Track Manager Interface V2</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1032e2",
+                        "primary-dark": "#0b24a8",
+                        "background-light": "#f6f6f8", 
+                        "background-dark": "#101322", 
+                        "panel-dark": "#161b2e", 
+                        "input-dark": "#1d233b", 
+                        "border-dark": "#2a3254",
+                        // Custom colors for multi-track
+                        "track-purple": "#a855f7",
+                        "track-blue": "#3b82f6",
+                        "track-green": "#22c55e",
+                        "track-red": "#ef4444", 
+                        "track-orange": "#f97316",
+                        "track-cyan": "#06b6d4",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "2xl": "1rem", "full": "9999px" },
+                    boxShadow: {
+                        'glow': '0 0 15px -3px rgba(16, 50, 226, 0.5)',
+                        'glow-sm': '0 0 8px -2px rgba(16, 50, 226, 0.4)',
+                        'glow-purple': '0 0 10px rgba(168, 85, 247, 0.4)',
+                        'glow-blue': '0 0 10px rgba(59, 130, 246, 0.4)',
+                        'glow-green': '0 0 10px rgba(34, 197, 94, 0.4)',
+                        'glow-red': '0 0 10px rgba(239, 68, 68, 0.4)',
+                        'glow-orange': '0 0 10px rgba(249, 115, 22, 0.4)',
+                        'glow-cyan': '0 0 10px rgba(6, 182, 212, 0.4)',
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #101322;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2a3254;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3b4670;
+        }
+        .piano-grid {
+            background-image: linear-gradient(#1d233b 1px, transparent 1px), linear-gradient(90deg, #1d233b 1px, transparent 1px);
+            background-size: 100% 24px, 40px 100%;
+        }
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #1032e2;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 5px rgba(16, 50, 226, 0.8);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #2a3254;
+            border-radius: 2px;
+        }
+        .recording-pulse {
+            animation: recordPulse 2s infinite;
+        }
+        @keyframes recordPulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-slate-300 h-screen w-full flex flex-col overflow-hidden selection:bg-primary selection:text-white">
+<header class="h-14 flex-none border-b border-border-dark bg-panel-dark flex items-center justify-between px-6 z-20">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-gradient-to-br from-primary to-indigo-500 flex items-center justify-center text-white font-bold text-lg shadow-glow-sm">
+                S
+            </div>
+<h1 class="text-xl font-bold tracking-tight text-white">Sonant</h1>
+<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-primary/20 text-indigo-300 border border-primary/30 ml-2">v2.1.0</span>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-background-dark border border-border-dark">
+<div class="w-2 h-2 rounded-full bg-primary shadow-[0_0_8px_rgba(16,50,226,0.6)] animate-pulse"></div>
+<span class="text-xs font-semibold text-primary">API CONNECTED</span>
+</div>
+<button class="text-slate-400 hover:text-white transition-colors">
+<span class="material-icons">settings</span>
+</button>
+</div>
+</header>
+<div class="flex-1 flex overflow-hidden">
+<aside class="w-80 flex-none bg-panel-dark border-r border-border-dark flex flex-col overflow-y-auto">
+<div class="p-6 space-y-6">
+<div class="space-y-2">
+<label class="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                        Prompt
+                        <span class="material-icons text-sm cursor-help hover:text-primary">info</span>
+</label>
+<div class="relative group">
+<textarea class="w-full h-24 bg-input-dark border border-border-dark rounded-lg p-3 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-none transition-all" placeholder="Describe the melody you want... e.g., 'A dark, melancholic arpeggio in the style of 80s synthwave with rising velocity.'"></textarea>
+<div class="absolute bottom-2 right-2">
+<button class="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
+<span class="material-icons text-sm">mic</span>
+</button>
+</div>
+</div>
+</div>
+<div class="space-y-2">
+<label class="text-xs font-bold uppercase tracking-wider text-slate-500">Generation Mode</label>
+<div class="relative">
+<select class="w-full appearance-none bg-input-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-primary cursor-pointer">
+<option>Melody</option>
+<option>Chord Progression</option>
+<option>Bassline</option>
+<option>Percussion Pattern</option>
+<option>Drone / Texture</option>
+</select>
+<span class="material-icons absolute right-3 top-2.5 text-slate-400 pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="space-y-3 pt-2 border-t border-border-dark">
+<div class="flex items-center justify-between mb-1">
+<label class="text-xs font-bold uppercase tracking-wider text-slate-500">Input Tracks</label>
+<div class="flex items-center gap-1">
+<button class="p-1 text-slate-400 hover:text-primary transition-colors rounded hover:bg-white/5" title="Add Track">
+<span class="material-icons text-sm">add</span>
+</button>
+</div>
+</div>
+<div class="bg-input-dark border border-border-dark rounded-lg overflow-hidden">
+<div class="px-3 py-2 border-b border-border-dark bg-panel-dark/50 flex items-center justify-between text-[10px] uppercase font-bold text-slate-500">
+<span>Source</span>
+<span class="mr-6">Type</span>
+</div>
+<div class="divide-y divide-border-dark/50">
+<div class="group relative flex items-center h-10 bg-panel-dark hover:bg-input-dark transition-colors">
+<div class="w-1.5 h-full bg-track-red shadow-[inset_-2px_0_4px_rgba(0,0,0,0.2)]"></div>
+<div class="flex-1 flex items-center px-2 min-w-0 gap-2">
+<div class="flex-1 min-w-0 relative">
+<select class="w-full bg-transparent border-none p-0 text-xs font-medium text-white focus:ring-0 cursor-pointer truncate pr-4">
+<option value="ch1">Live Input: CH 1</option>
+<option selected="" value="ch2">Live Input: CH 2</option>
+<option value="file">Load MIDI File...</option>
+</select>
+<div class="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+<span class="material-icons text-[10px]">arrow_drop_down</span>
+</div>
+</div>
+<div class="flex-none">
+<span class="px-1.5 py-0.5 rounded bg-track-red/20 text-[9px] font-bold text-track-red uppercase tracking-wide border border-track-red/30">Bass</span>
+</div>
+</div>
+<div class="flex items-center pr-2 gap-1 border-l border-white/5 pl-2 h-6">
+<button class="text-track-red hover:text-white transition-colors" title="Monitoring On">
+<span class="material-icons text-[14px] recording-pulse rounded-full">fiber_manual_record</span>
+</button>
+<button class="text-slate-400 hover:text-white transition-colors" title="Mute/Hide">
+<span class="material-icons text-[14px]">visibility</span>
+</button>
+</div>
+</div>
+<div class="group relative flex items-center h-10 bg-panel-dark hover:bg-input-dark transition-colors">
+<div class="w-1.5 h-full bg-track-purple shadow-[inset_-2px_0_4px_rgba(0,0,0,0.2)]"></div>
+<div class="flex-1 flex items-center px-2 min-w-0 gap-2">
+<div class="flex-1 min-w-0 relative">
+<select class="w-full bg-transparent border-none p-0 text-xs font-medium text-white focus:ring-0 cursor-pointer truncate pr-4">
+<option value="live">Live Input...</option>
+<option selected="" value="file">Lead_Ref.mid</option>
+<option value="file2">Browse Files...</option>
+</select>
+<div class="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+<span class="material-icons text-[10px]">arrow_drop_down</span>
+</div>
+</div>
+<div class="flex-none">
+<span class="px-1.5 py-0.5 rounded bg-track-purple/20 text-[9px] font-bold text-track-purple uppercase tracking-wide border border-track-purple/30">Melody</span>
+</div>
+</div>
+<div class="flex items-center pr-2 gap-1 border-l border-white/5 pl-2 h-6">
+<button class="text-slate-600 hover:text-slate-400 transition-colors" title="Not Monitoring">
+<span class="material-icons text-[14px]">fiber_manual_record</span>
+</button>
+<button class="text-slate-400 hover:text-white transition-colors" title="Mute/Hide">
+<span class="material-icons text-[14px]">visibility</span>
+</button>
+</div>
+</div>
+<div class="group relative flex items-center h-10 bg-panel-dark hover:bg-input-dark transition-colors">
+<div class="w-1.5 h-full bg-track-blue shadow-[inset_-2px_0_4px_rgba(0,0,0,0.2)]"></div>
+<div class="flex-1 flex items-center px-2 min-w-0 gap-2">
+<div class="flex-1 min-w-0 relative">
+<select class="w-full bg-transparent border-none p-0 text-xs font-medium text-slate-300 focus:ring-0 cursor-pointer truncate pr-4">
+<option value="live">Live Input...</option>
+<option selected="" value="file">Chords_Ref.mid</option>
+</select>
+<div class="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+<span class="material-icons text-[10px]">arrow_drop_down</span>
+</div>
+</div>
+<div class="flex-none">
+<span class="px-1.5 py-0.5 rounded bg-track-blue/20 text-[9px] font-bold text-track-blue uppercase tracking-wide border border-track-blue/30">Chords</span>
+</div>
+</div>
+<div class="flex items-center pr-2 gap-1 border-l border-white/5 pl-2 h-6">
+<button class="text-slate-600 hover:text-slate-400 transition-colors" title="Not Monitoring">
+<span class="material-icons text-[14px]">fiber_manual_record</span>
+</button>
+<button class="text-slate-600 hover:text-white transition-colors" title="Hidden">
+<span class="material-icons text-[14px]">visibility_off</span>
+</button>
+</div>
+</div>
+<div class="group relative flex items-center h-10 bg-panel-dark hover:bg-input-dark transition-colors">
+<div class="w-1.5 h-full bg-track-cyan shadow-[inset_-2px_0_4px_rgba(0,0,0,0.2)]"></div>
+<div class="flex-1 flex items-center px-2 min-w-0 gap-2">
+<div class="flex-1 min-w-0 relative">
+<select class="w-full bg-transparent border-none p-0 text-xs font-medium text-white focus:ring-0 cursor-pointer truncate pr-4">
+<option value="ch1">Live Input: CH 1</option>
+<option selected="" value="ch5">Live Input: CH 5</option>
+<option value="file">Load MIDI File...</option>
+</select>
+<div class="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+<span class="material-icons text-[10px]">arrow_drop_down</span>
+</div>
+</div>
+<div class="flex-none">
+<span class="px-1.5 py-0.5 rounded bg-track-cyan/20 text-[9px] font-bold text-track-cyan uppercase tracking-wide border border-track-cyan/30">Arp</span>
+</div>
+</div>
+<div class="flex items-center pr-2 gap-1 border-l border-white/5 pl-2 h-6">
+<button class="text-slate-600 hover:text-track-cyan transition-colors" title="Monitoring Off">
+<span class="material-icons text-[14px]">fiber_manual_record</span>
+</button>
+<button class="text-slate-400 hover:text-white transition-colors" title="Mute/Hide">
+<span class="material-icons text-[14px]">visibility</span>
+</button>
+</div>
+</div>
+</div>
+<button class="w-full py-1.5 text-[10px] font-bold text-slate-500 uppercase hover:bg-white/5 hover:text-primary transition-colors flex items-center justify-center gap-1 border-t border-border-dark/50">
+<span class="material-icons text-[12px]">add</span> Add Track
+                        </button>
+</div>
+</div>
+<div class="space-y-3 pt-2 border-t border-border-dark">
+<div class="flex items-center justify-between">
+<label class="text-xs font-bold uppercase tracking-wider text-slate-500">Generated Patterns</label>
+</div>
+<div class="space-y-2">
+<div class="h-32 bg-input-dark border border-border-dark rounded-lg overflow-y-auto pr-1">
+<ul class="divide-y divide-border-dark">
+<li class="p-2 bg-track-green/10 border-l-2 border-track-green cursor-pointer hover:bg-track-green/20 transition-colors group relative" draggable="true">
+<div class="flex justify-between items-center pl-1">
+<div class="flex items-center gap-2 overflow-hidden flex-1">
+<div class="text-slate-600 group-hover:text-slate-300 cursor-grab mr-1 transition-colors" title="Drag to DAW">
+<span class="material-icons text-base">grid_view</span>
+</div>
+<div class="flex-none relative flex items-center justify-center">
+<input checked="" class="appearance-none w-3 h-3 rounded-full border border-slate-500 checked:bg-track-green checked:border-track-green cursor-pointer focus:ring-0 focus:ring-offset-0 bg-transparent transition-all" name="pattern_select" type="radio"/>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="text-xs font-bold text-white truncate">Pattern 1</span>
+<span class="text-[10px] text-track-green uppercase font-bold tracking-wider mt-0.5">Active</span>
+</div>
+</div>
+<div class="flex items-center gap-1">
+<button class="text-track-green hover:text-white p-1 rounded transition-colors" title="Toggle Visibility">
+<span class="material-icons text-xs">visibility</span>
+</button>
+<button class="text-slate-500 hover:text-white p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-icons text-xs">more_vert</span>
+</button>
+</div>
+</div>
+</li>
+<li class="p-2 hover:bg-white/5 transition-colors border-l-2 border-transparent cursor-pointer group relative" draggable="true">
+<div class="flex justify-between items-center pl-1">
+<div class="flex items-center gap-2 overflow-hidden flex-1">
+<div class="text-slate-600 group-hover:text-slate-300 cursor-grab mr-1 transition-colors" title="Drag to DAW">
+<span class="material-icons text-base">grid_view</span>
+</div>
+<div class="flex-none relative flex items-center justify-center">
+<input class="appearance-none w-3 h-3 rounded-full border border-slate-600 checked:bg-track-green checked:border-track-green cursor-pointer focus:ring-0 focus:ring-offset-0 bg-transparent transition-all hover:border-slate-400" name="pattern_select" type="radio"/>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="text-xs font-medium text-slate-400 truncate group-hover:text-slate-200">Pattern 2</span>
+<span class="text-[10px] text-slate-600 uppercase font-bold tracking-wider mt-0.5">Variation A</span>
+</div>
+</div>
+<div class="flex items-center gap-1">
+<button class="text-slate-600 hover:text-white p-1 rounded transition-colors" title="Toggle Visibility">
+<span class="material-icons text-xs">visibility_off</span>
+</button>
+<button class="text-slate-500 hover:text-white p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-icons text-xs">more_vert</span>
+</button>
+</div>
+</div>
+</li>
+<li class="p-2 hover:bg-white/5 transition-colors border-l-2 border-transparent cursor-pointer group relative" draggable="true">
+<div class="flex justify-between items-center pl-1">
+<div class="flex items-center gap-2 overflow-hidden flex-1">
+<div class="text-slate-600 group-hover:text-slate-300 cursor-grab mr-1 transition-colors" title="Drag to DAW">
+<span class="material-icons text-base">grid_view</span>
+</div>
+<div class="flex-none relative flex items-center justify-center">
+<input class="appearance-none w-3 h-3 rounded-full border border-slate-600 checked:bg-track-green checked:border-track-green cursor-pointer focus:ring-0 focus:ring-offset-0 bg-transparent transition-all hover:border-slate-400" name="pattern_select" type="radio"/>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="text-xs font-medium text-slate-400 truncate group-hover:text-slate-200">Pattern 3</span>
+<span class="text-[10px] text-slate-600 uppercase font-bold tracking-wider mt-0.5">Variation B</span>
+</div>
+</div>
+<div class="flex items-center gap-1">
+<button class="text-slate-600 hover:text-white p-1 rounded transition-colors" title="Toggle Visibility">
+<span class="material-icons text-xs">visibility_off</span>
+</button>
+<button class="text-slate-500 hover:text-white p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-icons text-xs">more_vert</span>
+</button>
+</div>
+</div>
+</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="space-y-6 pt-2 border-t border-border-dark">
+<div class="space-y-3">
+<div class="flex justify-between items-center text-xs">
+<span class="font-medium text-slate-300">Complexity</span>
+<span class="font-mono text-primary">75%</span>
+</div>
+<input class="w-full" max="100" min="0" type="range" value="75"/>
+<div class="flex justify-between text-[10px] text-slate-500 font-mono uppercase">
+<span>Simple</span>
+<span>Chaotic</span>
+</div>
+</div>
+<div class="space-y-3">
+<div class="flex justify-between items-center text-xs">
+<span class="font-medium text-slate-300">Note Density</span>
+<span class="font-mono text-primary">40%</span>
+</div>
+<input class="w-full" max="100" min="0" type="range" value="40"/>
+<div class="flex justify-between text-[10px] text-slate-500 font-mono uppercase">
+<span>Sparse</span>
+<span>Busy</span>
+</div>
+</div>
+</div>
+</div>
+<div class="mt-auto p-4 border-t border-border-dark text-[10px] text-slate-600 text-center">
+                Sonant Core v2.1 • AI Model: Opus-midi-xl
+            </div>
+</aside>
+<main class="flex-1 flex flex-col min-w-0 bg-background-dark relative">
+<div class="h-16 flex-none border-b border-border-dark flex items-center px-6 gap-6 bg-background-dark/50 backdrop-blur-sm z-10">
+<div class="flex items-center gap-3">
+<label class="text-xs font-bold text-slate-500 uppercase">Key</label>
+<select class="bg-input-dark border border-border-dark rounded px-2 py-1 text-sm font-mono text-white focus:outline-none focus:border-primary w-16 text-center">
+<option>C</option>
+<option>C#</option>
+<option>D</option>
+<option selected="">D#</option>
+<option>E</option>
+<option>F</option>
+</select>
+</div>
+<div class="flex items-center gap-3">
+<label class="text-xs font-bold text-slate-500 uppercase">Scale</label>
+<select class="bg-input-dark border border-border-dark rounded px-2 py-1 text-sm font-mono text-white focus:outline-none focus:border-primary w-32">
+<option>Major</option>
+<option selected="">Minor (Aeolian)</option>
+<option>Dorian</option>
+<option>Phrygian</option>
+<option>Lydian</option>
+</select>
+</div>
+<div class="h-8 w-px bg-border-dark"></div>
+<div class="flex items-center gap-3">
+<label class="text-xs font-bold text-slate-500 uppercase">BPM</label>
+<div class="relative flex items-center">
+<button class="absolute left-0 w-6 h-full flex items-center justify-center text-slate-400 hover:text-white">-</button>
+<input class="bg-input-dark border border-border-dark rounded px-2 py-1 text-sm font-mono text-white focus:outline-none focus:border-primary w-20 text-center" type="text" value="128"/>
+<button class="absolute right-0 w-6 h-full flex items-center justify-center text-slate-400 hover:text-white">+</button>
+</div>
+</div>
+<div class="ml-auto flex items-center gap-2">
+<button class="p-2 rounded hover:bg-white/5 text-slate-400 hover:text-white" title="Undo">
+<span class="material-icons text-sm">undo</span>
+</button>
+<button class="p-2 rounded hover:bg-white/5 text-slate-400 hover:text-white" title="Redo">
+<span class="material-icons text-sm">redo</span>
+</button>
+<div class="h-4 w-px bg-border-dark mx-1"></div>
+<button class="p-2 rounded hover:bg-white/5 text-slate-400 hover:text-white" title="Clear All">
+<span class="material-icons text-sm">delete_outline</span>
+</button>
+</div>
+</div>
+<div class="flex-1 relative overflow-hidden bg-[#101322]">
+<div class="absolute top-0 bottom-0 left-0 w-12 bg-panel-dark border-r border-border-dark flex flex-col z-10 shadow-lg">
+<div class="flex-1 flex flex-col">
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent relative"><span class="absolute right-1 text-[9px] text-slate-500 top-1">C4</span></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent relative"><span class="absolute right-1 text-[9px] text-slate-500 top-1">F3</span></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+<div class="h-6 border-b border-border-dark bg-transparent relative"><span class="absolute right-1 text-[9px] text-slate-500 top-1">C3</span></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent relative"><span class="absolute right-1 text-[9px] text-slate-500 top-1">F2</span></div>
+<div class="h-6 border-b border-white/5 bg-white/5"></div>
+<div class="h-6 border-b border-border-dark bg-transparent"></div>
+</div>
+</div>
+<div class="absolute inset-0 left-12 piano-grid overflow-auto">
+<div class="absolute top-0 bottom-0 left-[160px] w-0.5 bg-yellow-500 z-10 shadow-[0_0_10px_rgba(234,179,8,0.5)]">
+<div class="absolute -top-3 -left-[5px] border-l-[6px] border-r-[6px] border-t-[8px] border-l-transparent border-r-transparent border-t-yellow-500"></div>
+</div>
+<div class="relative w-full h-full pt-1">
+<div class="absolute left-[40px] top-[288px] w-[120px] h-5 rounded-sm bg-track-blue/40 border border-track-blue/60 shadow-glow-blue cursor-pointer z-0"></div>
+<div class="absolute left-[40px] top-[240px] w-[120px] h-5 rounded-sm bg-track-blue/40 border border-track-blue/60 shadow-glow-blue cursor-pointer z-0"></div>
+<div class="absolute left-[40px] top-[192px] w-[120px] h-5 rounded-sm bg-track-blue/40 border border-track-blue/60 shadow-glow-blue cursor-pointer z-0"></div>
+<div class="absolute left-[360px] top-[264px] w-[120px] h-5 rounded-sm bg-track-blue/40 border border-track-blue/60 shadow-glow-blue cursor-pointer z-0"></div>
+<div class="absolute left-[360px] top-[216px] w-[120px] h-5 rounded-sm bg-track-blue/40 border border-track-blue/60 shadow-glow-blue cursor-pointer z-0"></div>
+<div class="absolute left-[360px] top-[168px] w-[120px] h-5 rounded-sm bg-track-blue/40 border border-track-blue/60 shadow-glow-blue cursor-pointer z-0"></div>
+<div class="absolute left-[40px] top-[240px] w-[80px] h-5 rounded-sm bg-track-purple/50 border border-track-purple/70 shadow-glow-purple cursor-pointer z-0"></div>
+<div class="absolute left-[120px] top-[216px] w-[40px] h-5 rounded-sm bg-track-purple/50 border border-track-purple/70 shadow-glow-purple cursor-pointer z-0"></div>
+<div class="absolute left-[180px] top-[168px] w-[40px] h-5 rounded-sm bg-track-green border border-white/40 hover:brightness-110 shadow-glow-green cursor-pointer z-10"></div>
+<div class="absolute left-[220px] top-[144px] w-[40px] h-5 rounded-sm bg-track-green border border-white/40 hover:brightness-110 shadow-glow-green cursor-pointer z-10"></div>
+<div class="absolute left-[260px] top-[120px] w-[80px] h-5 rounded-sm bg-track-green border border-white/40 hover:brightness-110 shadow-glow-green cursor-pointer z-10"></div>
+<div class="absolute left-[440px] top-[264px] w-[40px] h-5 rounded-sm bg-track-red/60 border border-track-red/80 shadow-glow-red cursor-pointer z-20"></div>
+<div class="absolute left-[480px] top-[288px] w-[40px] h-5 rounded-sm bg-track-red/60 border border-track-red/80 shadow-glow-red cursor-pointer z-20"></div>
+<div class="absolute left-[360px] top-[168px] w-[40px] h-5 rounded-sm bg-white/5 border border-white/10 border-dashed pointer-events-none z-0"></div>
+<div class="absolute left-[400px] top-[144px] w-[40px] h-5 rounded-sm bg-white/5 border border-white/10 border-dashed pointer-events-none z-0"></div>
+</div>
+</div>
+</div>
+<div class="h-20 flex-none bg-panel-dark border-t border-border-dark flex items-center justify-between px-6 shadow-[0_-5px_20px_rgba(0,0,0,0.3)] z-20">
+<div class="flex items-center gap-4">
+<span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Status:</span>
+<span class="text-sm font-medium text-slate-200 flex items-center gap-2">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        Ready to generate
+                    </span>
+</div>
+<div class="flex items-center gap-4">
+<button class="relative flex items-center gap-3 px-8 py-3 bg-primary hover:bg-primary-dark rounded-lg text-white font-bold text-lg shadow-glow hover:shadow-lg transition-all transform active:scale-95">
+<span class="material-icons animate-pulse-slow">auto_awesome</span>
+                        GENERATE
+                    </button>
+</div>
+</div>
+</main>
+</div>
+
+</body></html>
