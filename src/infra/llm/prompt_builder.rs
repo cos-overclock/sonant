@@ -253,45 +253,46 @@ mod tests {
     }
 
     #[test]
-    fn melody_template_is_selected() {
-        let prompt = PromptBuilder::build(&request_with_mode(GenerationMode::Melody));
-        assert!(prompt.user.contains("Create a lead melody"));
-    }
+    fn prompt_selects_expected_mode_name_and_template_for_all_modes() {
+        let cases = [
+            (GenerationMode::Melody, "melody", "Create a lead melody"),
+            (
+                GenerationMode::ChordProgression,
+                "chord_progression",
+                "Create a chord progression pattern",
+            ),
+            (
+                GenerationMode::DrumPattern,
+                "drum_pattern",
+                "Create a drum groove",
+            ),
+            (GenerationMode::Bassline, "bassline", "Create a bassline"),
+            (
+                GenerationMode::CounterMelody,
+                "counter_melody",
+                "Create a counter-melody",
+            ),
+            (GenerationMode::Harmony, "harmony", "Create a harmony line"),
+            (
+                GenerationMode::Continuation,
+                "continuation",
+                "Continue the musical idea",
+            ),
+        ];
 
-    #[test]
-    fn chord_progression_template_is_selected() {
-        let prompt = PromptBuilder::build(&request_with_mode(GenerationMode::ChordProgression));
-        assert!(prompt.user.contains("Create a chord progression pattern"));
-    }
-
-    #[test]
-    fn drum_pattern_template_is_selected() {
-        let prompt = PromptBuilder::build(&request_with_mode(GenerationMode::DrumPattern));
-        assert!(prompt.user.contains("Create a drum groove"));
-    }
-
-    #[test]
-    fn bassline_template_is_selected() {
-        let prompt = PromptBuilder::build(&request_with_mode(GenerationMode::Bassline));
-        assert!(prompt.user.contains("Create a bassline"));
-    }
-
-    #[test]
-    fn counter_melody_template_is_selected() {
-        let prompt = PromptBuilder::build(&request_with_mode(GenerationMode::CounterMelody));
-        assert!(prompt.user.contains("Create a counter-melody"));
-    }
-
-    #[test]
-    fn harmony_template_is_selected() {
-        let prompt = PromptBuilder::build(&request_with_mode(GenerationMode::Harmony));
-        assert!(prompt.user.contains("Create a harmony line"));
-    }
-
-    #[test]
-    fn continuation_template_is_selected() {
-        let prompt = PromptBuilder::build(&request_with_mode(GenerationMode::Continuation));
-        assert!(prompt.user.contains("Continue the musical idea"));
+        for (mode, mode_name, template_fragment) in cases {
+            let prompt = PromptBuilder::build(&request_with_mode(mode));
+            assert!(
+                prompt
+                    .user
+                    .contains(&format!("Generation mode: {mode_name}")),
+                "mode label should be rendered for {mode:?}"
+            );
+            assert!(
+                prompt.user.contains(template_fragment),
+                "mode template should be selected for {mode:?}"
+            );
+        }
     }
 
     #[test]
