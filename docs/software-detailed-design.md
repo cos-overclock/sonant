@@ -152,6 +152,9 @@ pub struct GenerationCandidate {
 - `source=File` の参照MIDIは `events` が空であってはならない
 - リアルタイム入力で使用する `channel` は `1..=16`
 - `channel_mappings` は入力種別ごとに一意（重複チャンネル割当は不可）
+- `recording` 設定はMIDI Channelごとに `1..=16` で個別に有効/無効を保持する
+- `source=Live` の参照MIDIは、`recording` が有効な対象チャンネルかつ DAW transport が `Playing` の区間で受信したイベントのみを採用する
+- リアルタイム入力バッファは小節単位で保持し、同一小節に新規入力があった場合はその小節データを上書きする（入力のない小節は保持）
 
 ## 4. 主要サービス設計
 
@@ -259,12 +262,16 @@ pub trait LlmGateway {
 - DAWから受け取ったリアルタイムMIDIを入力種別へ振り分け
 - 入力種別ごとの`channel_mappings`を管理
 - 生成時に参照可能な短期バッファ（種別ごと）を保持
+- チャンネルごとの`recording` 設定と DAW transport 状態に応じて、バッファ更新の有効/無効を切り替える
+- 種別バッファはファイル入力と同等の参照情報として `MidiReference::Live` に変換できる形で保持する
 
 I/F:
 
 ```rust
 pub trait MidiInputRouter {
     fn update_channel_mapping(&self, mappings: Vec<ChannelMapping>) -> Result<(), AppError>;
+    fn set_recording_channel_enabled(&self, channel: u8, enabled: bool) -> Result<(), AppError>;
+    fn update_transport_state(&self, is_playing: bool, playhead_ppq: f64);
     fn push_live_event(&self, channel: u8, event: MidiEvent);
     fn snapshot_reference(&self, kind: LiveInputKind) -> Vec<MidiEvent>;
 }
@@ -276,6 +283,14 @@ pub trait MidiInputRouter {
 - Chord: Channel 2
 - Drum: Channel 10
 - Bass: Channel 3
+
+バッファ仕様:
+
+- `recording` が有効なチャンネルのみ、DAW再生が開始された後に受信したMIDIイベントを取り込む
+- バッファは入力種別ごとに小節インデックス単位で保持する
+- 既存バッファがある状態で再生中に同一小節へ入力があった場合、その小節のイベント列を最新入力で上書きする
+- 再生中に入力されなかった小節は既存データを保持する
+- `snapshot_reference` は小節順にイベントを連結し、ファイル入力と同じ参照MIDIとして利用可能な形で返す
 
 ### 4.7 UIコンポーネント設計（基準画面準拠）
 
@@ -310,6 +325,7 @@ pub trait MidiInputRouter {
 - `Generate` 実行前に `mode_reference_requirement_satisfied` を必ず評価し、不足時は送信せずメッセージを表示する。
 - `SaveSettings` 成功後、ヘッダーAPIステータス（`API CONNECTED` など）と既定モデル表示をメイン画面へ同期する。
 - `UpdateTrackSource` で `Live Input` を選択した行は、`channel_mappings` の重複チェック対象に含める。
+- `ToggleRecordingChannel` はMIDI Channel単位で `recording` 設定を更新し、無効チャンネル入力はバッファへ反映しない。
 
 ## 5. 状態管理
 
@@ -368,10 +384,12 @@ UI画面状態（4.7対応）:
 
 1. ユーザーが入力種別ごとにソースを「リアルタイム入力」に設定
 2. `channel_mapping_panel` で種別ごとのMIDI Channelを設定
-3. `live_midi_capture` がDAW入力を受信し `midi_input_router` に渡す
-4. `midi_input_router` がチャンネルに応じて種別バッファへ振り分け
-5. 生成時に種別バッファを `MidiReference::Live` として `GenerationRequest` に詰める
-6. 以後は通常の生成シーケンス（6.1）で処理
+3. ユーザーが対象MIDI Channelごとに `Recording` を有効化して DAW再生を開始
+4. `live_midi_capture` がDAW入力を受信し `midi_input_router` に渡す
+5. `midi_input_router` は `recording` 有効チャンネルかつ transport `Playing` の間だけ、チャンネルに応じて種別バッファ（小節単位）へ書き込む
+6. 同一小節に新規入力があった場合は当該小節を上書きし、入力がない小節は既存データを保持する
+7. 生成時に種別バッファを `MidiReference::Live` として `GenerationRequest` に詰める（ファイル参照と同様に扱う）
+8. 以後は通常の生成シーケンス（6.1）で処理
 
 ## 7. 永続化設計
 
@@ -382,6 +400,7 @@ UI画面状態（4.7対応）:
   - 既定BPM/キー/スケール
   - 入力ソース設定（ファイル/リアルタイム）
   - リアルタイム入力のチャンネルマッピング
+  - リアルタイム入力のチャンネル別 `recording` 設定
   - UI表示設定
 - APIキー本体は保存しない（`api_key_store` 参照のみ保持）
 
@@ -440,6 +459,8 @@ UI表示ポリシー:
 - 参照MIDIあり/なしの分岐
 - `Apply`でMIDIイベント列が出力されること
 - リアルタイム入力 + チャンネルマッピングで参照生成されること
+- `Recording` が有効なMIDIチャンネルのみリアルタイム入力バッファが更新されること
+- リアルタイム入力バッファの小節単位上書き（未入力小節保持）が期待通りであること
 
 ### 9.3 非機能テスト
 
@@ -480,4 +501,5 @@ UI表示ポリシー:
 - 参照MIDI解析のキー推定は外部ライブラリを採用する
 - MIDI入力はファイル選択とリアルタイム入力の両方に対応する
 - リアルタイム入力では入力種別ごとにMIDI Channelを設定可能とする
+- リアルタイム入力バッファは `Recording` 有効チャンネル + DAW再生中のみ更新し、小節単位で上書きする
 - UI実装は `docs/image/sonant_main_plugin_interface/screen.png` と `docs/image/sonant_api_&_model_settings/screen.png` を基準とする

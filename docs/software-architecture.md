@@ -151,9 +151,11 @@ UI一貫性ルール:
 
 1. UIで入力種別（例: メロディ、コード）ごとに入力ソースを「リアルタイム入力」に設定
 2. 入力種別ごとにMIDI Channelを割当（例: メロディ=Channel 1、コード=Channel 2）
-3. `live_midi_capture` がDAWからの入力イベントを受信し、`midi_input_router` がチャンネル割当に従って種別ごとのバッファへ振り分け
-4. `GenerationCoordinator` が種別別バッファを参照MIDIとして扱い、`MidiAnalyzer` と `PromptBuilder` に渡す
-5. 生成処理は通常フロー（6.1）と同様に実行
+3. MIDI Channelごとに `Recording` を有効化した状態でDAW再生を開始する
+4. `live_midi_capture` がDAWからの入力イベントを受信し、`midi_input_router` がチャンネル割当に従って種別ごとの小節バッファへ振り分ける
+5. `Recording` 有効チャンネルのみバッファを更新し、バッファ済み小節に再入力があった場合は当該小節を上書きし、入力がない小節の既存データは保持する
+6. `GenerationCoordinator` が種別別バッファをファイル参照と同等の参照MIDIとして扱い、`MidiAnalyzer` と `PromptBuilder` に渡す
+7. 生成処理は通常フロー（6.1）と同様に実行
 
 ## 7. セキュリティ設計
 
@@ -201,6 +203,8 @@ UI一貫性ルール:
 - 参照MIDI解析のキー推定は外部ライブラリを採用する
 - MIDI入力はファイル選択とリアルタイム入力の両方に対応する
 - リアルタイム入力では入力種別ごとにMIDI Channelを設定可能とする
+- RecordingモードはMIDI Channelごとに設定可能とする
+- リアルタイム入力バッファは `Recording` 有効チャンネル + DAW再生中のみ更新し、小節単位で上書きする
 - UI実装は `docs/image/sonant_main_plugin_interface/screen.png` と `docs/image/sonant_api_&_model_settings/screen.png` を基準とする
 
 ## 12. FR-05実装進捗チェックリスト（2026-02-16時点）
