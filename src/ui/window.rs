@@ -1129,13 +1129,28 @@ impl Render for SonantMainWindow {
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.on_reference_slot_selected(slot, cx)
                             }));
-                        let select_button = if slot_is_selected {
-                            select_button.primary()
-                        } else {
-                            select_button
-                        };
-                        div()
-                            .id(Self::input_track_row_id(slot))
+	                        let select_button = if slot_is_selected {
+	                            select_button.primary()
+	                        } else {
+	                            select_button
+	                        };
+	                        let source_button =
+	                            |source: ReferenceSource, label: &'static str| {
+	                                let button = Button::new(Self::input_track_source_button_id(
+	                                    slot, source,
+	                                ))
+	                                .label(label)
+	                                .on_click(cx.listener(move |this, _, _window, cx| {
+	                                    this.on_reference_source_selected(slot, source, cx)
+	                                }));
+	                                if slot_source == source {
+	                                    button.primary()
+	                                } else {
+	                                    button
+	                                }
+	                            };
+	                        div()
+	                            .id(Self::input_track_row_id(slot))
                             .flex()
                             .flex_col()
                             .gap_2()
@@ -1161,73 +1176,15 @@ impl Render for SonantMainWindow {
                                     .child(select_button),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        if slot_source == ReferenceSource::File {
-                                            Button::new(Self::input_track_source_button_id(
-                                                slot,
-                                                ReferenceSource::File,
-                                            ))
-                                            .label("File")
-                                            .primary()
-                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                this.on_reference_source_selected(
-                                                    slot,
-                                                    ReferenceSource::File,
-                                                    cx,
-                                                )
-                                            }))
-                                        } else {
-                                            Button::new(Self::input_track_source_button_id(
-                                                slot,
-                                                ReferenceSource::File,
-                                            ))
-                                            .label("File")
-                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                this.on_reference_source_selected(
-                                                    slot,
-                                                    ReferenceSource::File,
-                                                    cx,
-                                                )
-                                            }))
-                                        },
-                                    )
-                                    .child(
-                                        if slot_source == ReferenceSource::Live {
-                                            Button::new(Self::input_track_source_button_id(
-                                                slot,
-                                                ReferenceSource::Live,
-                                            ))
-                                            .label("Live")
-                                            .primary()
-                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                this.on_reference_source_selected(
-                                                    slot,
-                                                    ReferenceSource::Live,
-                                                    cx,
-                                                )
-                                            }))
-                                        } else {
-                                            Button::new(Self::input_track_source_button_id(
-                                                slot,
-                                                ReferenceSource::Live,
-                                            ))
-                                            .label("Live")
-                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                this.on_reference_source_selected(
-                                                    slot,
-                                                    ReferenceSource::Live,
-                                                    cx,
-                                                )
-                                            }))
-                                        },
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(rgb(0x94a3b8))
+	                                div()
+	                                    .flex()
+	                                    .items_center()
+	                                    .gap_2()
+	                                    .child(source_button(ReferenceSource::File, "File"))
+	                                    .child(source_button(ReferenceSource::Live, "Live"))
+	                                    .child(
+	                                        div()
+	                                            .text_color(rgb(0x94a3b8))
                                             .child(format!("Source: {}", Self::reference_source_label(slot_source))),
                                     ),
                             )
