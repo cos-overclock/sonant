@@ -1,30 +1,22 @@
-use clack_extensions::audio_ports::{AudioPortInfoWriter, PluginAudioPorts, PluginAudioPortsImpl};
-use clack_extensions::gui::{GuiApiType, GuiConfiguration, GuiSize, PluginGui, PluginGuiImpl};
-use clack_extensions::note_ports::{
-    NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
-    PluginNotePortsImpl,
-};
-use clack_extensions::state::{PluginState, PluginStateImpl};
+use clack_extensions::audio_ports::PluginAudioPorts;
+use clack_extensions::gui::PluginGui;
+use clack_extensions::note_ports::PluginNotePorts;
+use clack_extensions::state::PluginState;
 use clack_plugin::events::Match;
 use clack_plugin::events::event_types::MidiEvent;
 use clack_plugin::events::spaces::CoreEventSpace;
 use clack_plugin::prelude::*;
-use clack_plugin::stream::{InputStream, OutputStream};
 use crossbeam_queue::ArrayQueue;
-use std::ffi::CStr;
-use std::io::{Read, Write};
-use std::mem::MaybeUninit;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+mod audio_ports_extension;
+mod gui_extension;
+mod note_ports_extension;
+mod state_extension;
+
+use gui_extension::SonantGuiController;
 
 const MIDI_EVENT_QUEUE_CAPACITY: usize = 2048;
-const NOTE_PORT_INDEX_MAIN: u32 = 0;
-const NOTE_PORT_ID_IN: u32 = 0;
-const NOTE_PORT_ID_OUT: u32 = 1;
-const NOTE_PORT_NAME_IN: &[u8] = b"midi_in";
-const NOTE_PORT_NAME_OUT: &[u8] = b"midi_out";
 
 pub struct SonantPlugin;
 
@@ -264,47 +256,6 @@ impl<'a> PluginMainThread<'a, SonantShared> for SonantPluginMainThread<'a> {
     }
 }
 
-const STATE_MAGIC: &[u8; 8] = b"SONANT01";
-const STATE_VERSION: u32 = 1;
-
-impl PluginStateImpl for SonantPluginMainThread<'_> {
-    fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
-        output.write_all(STATE_MAGIC)?;
-        output.write_all(&STATE_VERSION.to_le_bytes())?;
-        Ok(())
-    }
-
-    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
-        let mut bytes = Vec::new();
-        input.read_to_end(&mut bytes)?;
-
-        // Backward compatibility: accept empty state from older plugin builds.
-        if bytes.is_empty() {
-            return Ok(());
-        }
-
-        if bytes.len() < STATE_MAGIC.len() + 4 {
-            return Err(PluginError::Message("Invalid state payload"));
-        }
-
-        if &bytes[..STATE_MAGIC.len()] != STATE_MAGIC {
-            return Err(PluginError::Message("Invalid state magic"));
-        }
-
-        let version_start = STATE_MAGIC.len();
-        let version_end = version_start + 4;
-        let mut version_bytes = [0u8; 4];
-        version_bytes.copy_from_slice(&bytes[version_start..version_end]);
-        let version = u32::from_le_bytes(version_bytes);
-
-        if version > STATE_VERSION {
-            return Err(PluginError::Message("Unsupported state version"));
-        }
-
-        Ok(())
-    }
-}
-
 pub struct SonantAudioProcessor<'a> {
     host: HostAudioProcessorHandle<'a>,
     midi_bridge: Arc<MidiBridge>,
@@ -375,276 +326,10 @@ impl<'a> PluginAudioProcessor<'a, SonantShared, SonantPluginMainThread<'a>>
     }
 }
 
-impl PluginGuiImpl for SonantPluginMainThread<'_> {
-    fn is_api_supported(&mut self, configuration: GuiConfiguration) -> bool {
-        let Some(api_type) = GuiApiType::default_for_current_platform() else {
-            return false;
-        };
-
-        configuration.api_type == api_type && configuration.is_floating
-    }
-
-    fn get_preferred_api(&mut self) -> Option<GuiConfiguration<'_>> {
-        let api_type = GuiApiType::default_for_current_platform()?;
-        Some(GuiConfiguration {
-            api_type,
-            is_floating: true,
-        })
-    }
-
-    fn create(&mut self, configuration: GuiConfiguration) -> Result<(), PluginError> {
-        if self.is_api_supported(configuration) {
-            Ok(())
-        } else {
-            Err(PluginError::Message("Only floating GUI is supported"))
-        }
-    }
-
-    fn destroy(&mut self) {
-        self.gui.destroy();
-    }
-
-    fn set_scale(&mut self, _scale: f64) -> Result<(), PluginError> {
-        Ok(())
-    }
-
-    fn get_size(&mut self) -> Option<GuiSize> {
-        Some(GuiSize {
-            width: 640,
-            height: 420,
-        })
-    }
-
-    fn set_size(&mut self, _size: GuiSize) -> Result<(), PluginError> {
-        Ok(())
-    }
-
-    fn set_parent(&mut self, _window: clack_extensions::gui::Window) -> Result<(), PluginError> {
-        Ok(())
-    }
-
-    fn set_transient(&mut self, _window: clack_extensions::gui::Window) -> Result<(), PluginError> {
-        Ok(())
-    }
-
-    fn show(&mut self) -> Result<(), PluginError> {
-        self.gui.show()
-    }
-
-    fn hide(&mut self) -> Result<(), PluginError> {
-        self.gui.hide();
-        Ok(())
-    }
-}
-
-impl PluginAudioPortsImpl for SonantPluginMainThread<'_> {
-    fn count(&mut self, is_input: bool) -> u32 {
-        audio_port_count(is_input)
-    }
-
-    fn get(&mut self, _index: u32, _is_input: bool, _writer: &mut AudioPortInfoWriter) {}
-}
-
-impl PluginNotePortsImpl for SonantPluginMainThread<'_> {
-    fn count(&mut self, is_input: bool) -> u32 {
-        note_port_count(is_input)
-    }
-
-    fn get(&mut self, index: u32, is_input: bool, writer: &mut NotePortInfoWriter) {
-        if let Some(note_port) = note_port_definition(index, is_input) {
-            writer.set(&note_port);
-        }
-    }
-}
-
-const fn audio_port_count(_is_input: bool) -> u32 {
-    0
-}
-
-const fn note_port_count(_is_input: bool) -> u32 {
-    1
-}
-
-fn note_port_definition(index: u32, is_input: bool) -> Option<NotePortInfo<'static>> {
-    if index != NOTE_PORT_INDEX_MAIN {
-        return None;
-    }
-
-    let (id, name) = if is_input {
-        (NOTE_PORT_ID_IN, NOTE_PORT_NAME_IN)
-    } else {
-        (NOTE_PORT_ID_OUT, NOTE_PORT_NAME_OUT)
-    };
-
-    Some(NotePortInfo {
-        id: ClapId::new(id),
-        name,
-        supported_dialects: NoteDialects::MIDI,
-        preferred_dialect: Some(NoteDialect::Midi),
-    })
-}
-
-#[derive(Default)]
-struct SonantGuiController {
-    state: HelperState,
-}
-
-#[derive(Default)]
-struct HelperState {
-    child: Option<Child>,
-    launched_at: Option<Instant>,
-}
-
-impl SonantGuiController {
-    fn show(&mut self) -> Result<(), PluginError> {
-        reap_finished_helper(&mut self.state);
-
-        if self.state.child.is_some() {
-            return Ok(());
-        }
-
-        let helper_path = resolve_helper_binary_path().ok_or(PluginError::Message(
-            "Could not resolve SonantGUIHelper path",
-        ))?;
-
-        let child = Command::new(helper_path)
-            .arg("--gpui-helper")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|_| PluginError::Message("Failed to launch SonantGUIHelper"))?;
-
-        self.state.child = Some(child);
-        self.state.launched_at = Some(Instant::now());
-        Ok(())
-    }
-
-    fn hide(&mut self) {
-        reap_finished_helper(&mut self.state);
-
-        // Some hosts invoke hide right after show during GUI negotiation.
-        // Keep the helper alive briefly to avoid immediate window flicker/close.
-        if self
-            .state
-            .launched_at
-            .map(|t| t.elapsed() < Duration::from_secs(2))
-            .unwrap_or(false)
-        {
-            return;
-        }
-
-        stop_helper(&mut self.state);
-    }
-
-    fn destroy(&mut self) {
-        reap_finished_helper(&mut self.state);
-
-        if self
-            .state
-            .launched_at
-            .map(|t| t.elapsed() < Duration::from_secs(2))
-            .unwrap_or(false)
-        {
-            return;
-        }
-
-        stop_helper(&mut self.state);
-    }
-}
-
-impl Drop for SonantGuiController {
-    fn drop(&mut self) {
-        self.destroy();
-    }
-}
-
-fn reap_finished_helper(state: &mut HelperState) {
-    let finished = state
-        .child
-        .as_mut()
-        .and_then(|child| child.try_wait().ok())
-        .flatten()
-        .is_some();
-
-    if finished {
-        state.child = None;
-        state.launched_at = None;
-    }
-}
-
-fn stop_helper(state: &mut HelperState) {
-    if let Some(mut child) = state.child.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    state.launched_at = None;
-}
-
-fn resolve_helper_binary_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("SONANT_GUI_HELPER_PATH") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-
-    let dylib_path = current_library_path()?;
-    let helper = dylib_path.parent()?.join("SonantGUIHelper");
-    helper.is_file().then_some(helper)
-}
-
-#[cfg(target_family = "unix")]
-fn current_library_path() -> Option<PathBuf> {
-    unsafe {
-        let mut info = MaybeUninit::<libc::Dl_info>::zeroed();
-        let symbol = current_library_path as *const () as *const libc::c_void;
-
-        if libc::dladdr(symbol, info.as_mut_ptr()) == 0 {
-            return None;
-        }
-
-        let info = info.assume_init();
-        if info.dli_fname.is_null() {
-            return None;
-        }
-
-        let path = CStr::from_ptr(info.dli_fname).to_str().ok()?;
-        Some(PathBuf::from(path))
-    }
-}
-
-#[cfg(not(target_family = "unix"))]
-fn current_library_path() -> Option<PathBuf> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clack_plugin::events::event_types::{NoteOffEvent, NoteOnEvent};
-
-    #[test]
-    fn note_port_definition_exposes_midi_in_and_out() {
-        assert_eq!(audio_port_count(true), 0);
-        assert_eq!(audio_port_count(false), 0);
-        assert_eq!(note_port_count(true), 1);
-        assert_eq!(note_port_count(false), 1);
-
-        let input = note_port_definition(NOTE_PORT_INDEX_MAIN, true)
-            .expect("input note port must be defined");
-        assert_eq!(input.id, ClapId::new(NOTE_PORT_ID_IN));
-        assert_eq!(input.name, NOTE_PORT_NAME_IN);
-        assert_eq!(input.preferred_dialect, Some(NoteDialect::Midi));
-        assert!(input.supported_dialects.supports(NoteDialect::Midi));
-
-        let output = note_port_definition(NOTE_PORT_INDEX_MAIN, false)
-            .expect("output note port must be defined");
-        assert_eq!(output.id, ClapId::new(NOTE_PORT_ID_OUT));
-        assert_eq!(output.name, NOTE_PORT_NAME_OUT);
-        assert_eq!(output.preferred_dialect, Some(NoteDialect::Midi));
-        assert!(output.supported_dialects.supports(NoteDialect::Midi));
-    }
 
     #[test]
     fn map_input_event_converts_note_events_to_midi() {
