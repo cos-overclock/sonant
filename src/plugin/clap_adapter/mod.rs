@@ -243,14 +243,19 @@ impl SonantShared {
     }
 }
 
+impl From<LiveInputEvent> for crate::app::LiveInputEvent {
+    fn from(event: LiveInputEvent) -> Self {
+        crate::app::LiveInputEvent {
+            time: event.time,
+            port_index: event.port_index,
+            data: event.data,
+        }
+    }
+}
+
 impl crate::app::LiveInputEventSource for SonantShared {
     fn try_pop_live_input_event(&self) -> Option<crate::app::LiveInputEvent> {
-        self.pop_live_input_event()
-            .map(|event| crate::app::LiveInputEvent {
-                time: event.time,
-                port_index: event.port_index,
-                data: event.data,
-            })
+        self.pop_live_input_event().map(Into::into)
     }
 }
 
