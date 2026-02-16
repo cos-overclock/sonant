@@ -376,8 +376,8 @@ struct AnthropicErrorDetail {
 mod tests {
     use super::{AnthropicProvider, map_http_error};
     use crate::domain::{
-        GenerationMode, GenerationParams, GenerationRequest, LlmError, MidiReferenceSummary,
-        ModelRef, ReferenceSource,
+        FileReferenceInput, GenerationMode, GenerationParams, GenerationRequest, LlmError,
+        MidiReferenceSummary, ModelRef, ReferenceSlot, ReferenceSource,
     };
     use reqwest::StatusCode;
     use std::time::Duration;
@@ -411,8 +411,11 @@ mod tests {
                 max_tokens: Some(512),
             },
             references: vec![MidiReferenceSummary {
-                slot: "melody".to_string(),
+                slot: ReferenceSlot::Melody,
                 source: ReferenceSource::File,
+                file: Some(FileReferenceInput {
+                    path: "references/melody.mid".to_string(),
+                }),
                 bars: 4,
                 note_count: 24,
                 density_hint: 0.42,
