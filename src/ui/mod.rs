@@ -153,6 +153,26 @@ mod tests {
         test_reference_with_slot(path, ReferenceSlot::Melody)
     }
 
+    fn test_live_reference_with_slot(slot: ReferenceSlot) -> MidiReferenceSummary {
+        MidiReferenceSummary {
+            slot,
+            source: ReferenceSource::Live,
+            file: None,
+            bars: 2,
+            note_count: 8,
+            density_hint: 0.25,
+            min_pitch: 55,
+            max_pitch: 67,
+            events: vec![MidiReferenceEvent {
+                track: 1,
+                absolute_tick: 120,
+                delta_tick: 120,
+                event: "LiveMidi channel=2 status=0x91 data1=55 data2=100 port=1 time=120"
+                    .to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn validate_prompt_input_rejects_empty_input() {
         assert!(validate_prompt_input("").is_err());
@@ -349,6 +369,14 @@ mod tests {
             "/tmp/chords.mid",
             ReferenceSlot::ChordProgression,
         )];
+        let melody_live_reference = vec![test_live_reference_with_slot(ReferenceSlot::Melody)];
+        let chord_live_reference = vec![test_live_reference_with_slot(
+            ReferenceSlot::ChordProgression,
+        )];
+        let mixed_references = vec![
+            test_reference_with_slot("/tmp/chords.mid", ReferenceSlot::ChordProgression),
+            test_live_reference_with_slot(ReferenceSlot::Melody),
+        ];
 
         let cases = [
             (GenerationMode::Melody, &no_references, true),
@@ -366,6 +394,15 @@ mod tests {
             (GenerationMode::Continuation, &chord_reference, true),
             (GenerationMode::Bassline, &melody_reference, true),
             (GenerationMode::Bassline, &chord_reference, true),
+            (GenerationMode::CounterMelody, &melody_live_reference, true),
+            (GenerationMode::Harmony, &melody_live_reference, true),
+            (GenerationMode::Continuation, &melody_live_reference, true),
+            (GenerationMode::CounterMelody, &chord_live_reference, false),
+            (GenerationMode::Harmony, &chord_live_reference, false),
+            (GenerationMode::Continuation, &chord_live_reference, true),
+            (GenerationMode::CounterMelody, &mixed_references, true),
+            (GenerationMode::Harmony, &mixed_references, true),
+            (GenerationMode::Continuation, &mixed_references, true),
         ];
 
         for (mode, references, expected) in cases {

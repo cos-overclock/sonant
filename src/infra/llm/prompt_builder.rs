@@ -252,6 +252,26 @@ mod tests {
         }
     }
 
+    fn live_reference(slot: ReferenceSlot) -> MidiReferenceSummary {
+        MidiReferenceSummary {
+            slot,
+            source: ReferenceSource::Live,
+            file: None,
+            bars: 2,
+            note_count: 8,
+            density_hint: 0.25,
+            min_pitch: 55,
+            max_pitch: 67,
+            events: vec![MidiReferenceEvent {
+                track: 1,
+                absolute_tick: 120,
+                delta_tick: 120,
+                event: "LiveMidi channel=2 status=0x91 data1=55 data2=100 port=1 time=120"
+                    .to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn prompt_selects_expected_mode_name_and_template_for_all_modes() {
         let cases = [
@@ -351,6 +371,43 @@ mod tests {
                 .user
                 .contains("track=0 abs_tick=0 delta_tick=0 event=NoteOn channel=0 key=60 vel=96")
         );
+    }
+
+    #[test]
+    fn prompt_includes_live_reference_summary() {
+        let mut request = request_with_mode(GenerationMode::Continuation);
+        request.references = vec![live_reference(ReferenceSlot::ContinuationSeed)];
+
+        let prompt = PromptBuilder::build(&request);
+
+        assert!(prompt.user.contains("slot: continuation_seed"));
+        assert!(prompt.user.contains("source: live"));
+        assert!(prompt.user.contains("file_path: n/a"));
+        assert!(prompt.user.contains("bars: 2"));
+        assert!(prompt.user.contains("note_count: 8"));
+        assert!(prompt.user.contains("density_hint: 0.250"));
+        assert!(prompt.user.contains("pitch_range: 55..67"));
+        assert!(prompt.user.contains("event=LiveMidi channel=2 status=0x91"));
+    }
+
+    #[test]
+    fn prompt_renders_file_and_live_references_together() {
+        let mut request = request_with_mode(GenerationMode::Continuation);
+        request.references = vec![
+            file_reference(),
+            live_reference(ReferenceSlot::ChordProgression),
+        ];
+
+        let prompt = PromptBuilder::build(&request);
+
+        assert!(prompt.user.contains("- reference #1"));
+        assert!(prompt.user.contains("- reference #2"));
+        assert!(prompt.user.contains("slot: melody"));
+        assert!(prompt.user.contains("source: file"));
+        assert!(prompt.user.contains("file_path: refs/melody.mid"));
+        assert!(prompt.user.contains("slot: chord_progression"));
+        assert!(prompt.user.contains("source: live"));
+        assert!(prompt.user.contains("file_path: n/a"));
     }
 
     #[test]

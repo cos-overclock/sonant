@@ -508,6 +508,26 @@ mod tests {
         }
     }
 
+    fn sample_live_reference(slot: ReferenceSlot) -> MidiReferenceSummary {
+        MidiReferenceSummary {
+            slot,
+            source: ReferenceSource::Live,
+            file: None,
+            bars: 2,
+            note_count: 12,
+            density_hint: 0.375,
+            min_pitch: 55,
+            max_pitch: 76,
+            events: vec![MidiReferenceEvent {
+                track: 1,
+                absolute_tick: 120,
+                delta_tick: 120,
+                event: "LiveMidi channel=2 status=0x91 data1=55 data2=100 port=1 time=120"
+                    .to_string(),
+            }],
+        }
+    }
+
     fn valid_request(
         mode: GenerationMode,
         references: Vec<MidiReferenceSummary>,
@@ -606,6 +626,11 @@ mod tests {
                 None,
             ),
             (
+                GenerationMode::CounterMelody,
+                vec![sample_live_reference(ReferenceSlot::Melody)],
+                None,
+            ),
+            (
                 GenerationMode::Harmony,
                 Vec::new(),
                 Some("harmony mode requires at least one melody MIDI reference"),
@@ -621,6 +646,11 @@ mod tests {
                 None,
             ),
             (
+                GenerationMode::Harmony,
+                vec![sample_live_reference(ReferenceSlot::Melody)],
+                None,
+            ),
+            (
                 GenerationMode::Continuation,
                 Vec::new(),
                 Some("continuation mode requires at least one MIDI reference"),
@@ -628,6 +658,27 @@ mod tests {
             (
                 GenerationMode::Continuation,
                 vec![sample_reference(ReferenceSlot::Melody)],
+                None,
+            ),
+            (
+                GenerationMode::Continuation,
+                vec![sample_live_reference(ReferenceSlot::ChordProgression)],
+                None,
+            ),
+            (
+                GenerationMode::CounterMelody,
+                vec![
+                    sample_reference(ReferenceSlot::ChordProgression),
+                    sample_live_reference(ReferenceSlot::Melody),
+                ],
+                None,
+            ),
+            (
+                GenerationMode::Harmony,
+                vec![
+                    sample_reference(ReferenceSlot::DrumPattern),
+                    sample_live_reference(ReferenceSlot::Melody),
+                ],
                 None,
             ),
         ];
