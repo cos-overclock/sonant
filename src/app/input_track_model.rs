@@ -29,7 +29,7 @@ impl ChannelMapping {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InputTrackModelError {
-    #[error("channel for {slot:?} must be in 1..=16 (got {channel})")]
+    #[error("channel for {slot:?} must be in {MIDI_CHANNEL_MIN}..={MIDI_CHANNEL_MAX} (got {channel})")]
     ChannelOutOfRange { slot: ReferenceSlot, channel: u8 },
     #[error(
         "live channel {channel} is already assigned to {existing_slot:?} and cannot also be assigned to {conflicting_slot:?}"
