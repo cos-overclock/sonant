@@ -123,7 +123,18 @@ pub struct GenerationCandidate {
 - `prompt` は空文字禁止（FR-02）
 - `bpm` は `20..=300`
 - `density/complexity` は `1..=5`
-- `Continuation` モード時は最低1つの参照MIDI必須（FR-05g）
+- モード別参照MIDI要件（FR-05a〜g）は以下の通り
+
+| Mode | 必須参照 | 任意参照 |
+|---|---|---|
+| `Melody` | なし | すべての `ReferenceSlot` |
+| `ChordProgression` | なし | すべての `ReferenceSlot` |
+| `DrumPattern` | なし | すべての `ReferenceSlot` |
+| `Bassline` | `Melody` または `ChordProgression` を最低1件 | その他の `ReferenceSlot` |
+| `CounterMelody` | `Melody` を最低1件 | `ChordProgression` など追加参照 |
+| `Harmony` | `Melody` を最低1件 | `ChordProgression` など追加参照 |
+| `Continuation` | いずれかの `ReferenceSlot` を最低1件（既存フレーズの継続元） | 追加参照 |
+
 - `source=File` の参照MIDIは `events` が空であってはならない
 - リアルタイム入力で使用する `channel` は `1..=16`
 - `channel_mappings` は入力種別ごとに一意（重複チャンネル割当は不可）
