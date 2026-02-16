@@ -376,19 +376,13 @@ impl SonantMainWindow {
         live_channel_used_by_other_slots(&self.input_track_model, slot, channel)
     }
 
-    fn first_available_live_channel_for_slot(&self, slot: ReferenceSlot) -> Option<u8> {
-        first_available_live_channel_for_slot(&self.input_track_model, slot)
-    }
-
     fn ensure_live_channel_mapping_for_slot(&mut self, slot: ReferenceSlot) -> Result<(), String> {
-        let target_channel = preferred_live_channel_for_slot(&self.input_track_model, slot)
-            .or_else(|| self.first_available_live_channel_for_slot(slot))
-            .ok_or_else(|| {
-                format!(
-                    "No free MIDI channel is available for {}.",
-                    Self::reference_slot_label(slot)
-                )
-            })?;
+        let live_channel_mappings = self.input_track_model.live_channel_mappings();
+        let target_channel = resolve_live_channel_mapping_for_slot(
+            slot,
+            self.channel_mapping_for_slot(slot),
+            &live_channel_mappings,
+        )?;
 
         self.input_track_model
             .set_channel_mapping(ChannelMapping {
@@ -877,13 +871,24 @@ fn live_channel_used_by_other_slots_in_mappings(
 }
 
 fn first_available_live_channel_for_slot(
+    slot: ReferenceSlot,
+    live_channel_mappings: &[ChannelMapping],
+) -> Option<u8> {
+    (MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX).find(|channel| {
+        !live_channel_used_by_other_slots_in_mappings(live_channel_mappings, slot, *channel)
+    })
+}
+
+#[cfg(test)]
+fn first_available_live_channel_for_slot_in_model(
     model: &InputTrackModel,
     slot: ReferenceSlot,
 ) -> Option<u8> {
-    (MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX)
-        .find(|channel| !live_channel_used_by_other_slots(model, slot, *channel))
+    let live_channel_mappings = model.live_channel_mappings();
+    first_available_live_channel_for_slot(slot, &live_channel_mappings)
 }
 
+#[cfg(test)]
 fn preferred_live_channel_for_slot(model: &InputTrackModel, slot: ReferenceSlot) -> Option<u8> {
     model
         .channel_mappings()
@@ -891,6 +896,24 @@ fn preferred_live_channel_for_slot(model: &InputTrackModel, slot: ReferenceSlot)
         .find(|mapping| mapping.slot == slot)
         .map(|mapping| mapping.channel)
         .filter(|channel| !live_channel_used_by_other_slots(model, slot, *channel))
+}
+
+fn resolve_live_channel_mapping_for_slot(
+    slot: ReferenceSlot,
+    preferred_channel: Option<u8>,
+    live_channel_mappings: &[ChannelMapping],
+) -> Result<u8, String> {
+    preferred_channel
+        .filter(|channel| {
+            !live_channel_used_by_other_slots_in_mappings(live_channel_mappings, slot, *channel)
+        })
+        .or_else(|| first_available_live_channel_for_slot(slot, live_channel_mappings))
+        .ok_or_else(|| {
+            format!(
+                "No free MIDI channel is available for {}.",
+                SonantMainWindow::reference_slot_label(slot)
+            )
+        })
 }
 
 impl Render for SonantMainWindow {
@@ -1683,8 +1706,10 @@ impl Render for SonantMainWindow {
 #[cfg(test)]
 mod tests {
     use super::{
-        first_available_live_channel_for_slot, live_channel_used_by_other_slots,
-        midi_channel_from_status, preferred_live_channel_for_slot, summarize_live_recording,
+        first_available_live_channel_for_slot, first_available_live_channel_for_slot_in_model,
+        live_channel_used_by_other_slots, midi_channel_from_status,
+        preferred_live_channel_for_slot, resolve_live_channel_mapping_for_slot,
+        summarize_live_recording,
     };
     use sonant::app::{ChannelMapping, InputTrackModel, LiveInputEvent};
     use sonant::domain::{ReferenceSlot, ReferenceSource};
@@ -1722,7 +1747,7 @@ mod tests {
             .expect("chord should switch to live");
 
         assert_eq!(
-            first_available_live_channel_for_slot(&model, ReferenceSlot::CounterMelody),
+            first_available_live_channel_for_slot_in_model(&model, ReferenceSlot::CounterMelody),
             Some(3)
         );
     }
@@ -1745,8 +1770,43 @@ mod tests {
             None
         );
         assert_eq!(
-            first_available_live_channel_for_slot(&model, ReferenceSlot::Bassline),
+            first_available_live_channel_for_slot_in_model(&model, ReferenceSlot::Bassline),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn first_available_live_channel_returns_none_when_all_channels_are_occupied() {
+        // Synthetic edge case to validate behavior if all MIDI channels are occupied.
+        let occupied_channels: Vec<ChannelMapping> = (1..=16)
+            .map(|channel| ChannelMapping {
+                slot: ReferenceSlot::Melody,
+                channel,
+            })
+            .collect();
+
+        assert_eq!(
+            first_available_live_channel_for_slot(ReferenceSlot::Bassline, &occupied_channels),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_live_channel_mapping_returns_error_when_no_channels_are_available() {
+        let occupied_channels: Vec<ChannelMapping> = (1..=16)
+            .map(|channel| ChannelMapping {
+                slot: ReferenceSlot::Melody,
+                channel,
+            })
+            .collect();
+
+        assert_eq!(
+            resolve_live_channel_mapping_for_slot(
+                ReferenceSlot::Bassline,
+                None,
+                &occupied_channels
+            ),
+            Err("No free MIDI channel is available for Bassline.".to_string())
         );
     }
 
