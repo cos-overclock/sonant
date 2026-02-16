@@ -266,12 +266,12 @@ mod tests {
     use crate::domain::{MidiReferenceEvent, ReferenceSlot};
     use crate::infra::midi::{MidiLoadError, MidiReferenceData, MidiSummary};
     use std::collections::VecDeque;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
     struct StubLoader {
         responses: Mutex<VecDeque<Result<MidiReferenceData, MidiLoadError>>>,
-        seen_paths: Mutex<Vec<String>>,
+        seen_paths: Mutex<Vec<PathBuf>>,
     }
 
     impl StubLoader {
@@ -282,7 +282,7 @@ mod tests {
             }
         }
 
-        fn seen_paths(&self) -> Vec<String> {
+        fn seen_paths(&self) -> Vec<PathBuf> {
             self.seen_paths
                 .lock()
                 .expect("stub loader seen path lock poisoned")
@@ -295,7 +295,7 @@ mod tests {
             self.seen_paths
                 .lock()
                 .expect("stub loader seen path lock poisoned")
-                .push(path.display().to_string());
+                .push(path.to_path_buf());
 
             self.responses
                 .lock()
@@ -307,6 +307,9 @@ mod tests {
 
     #[test]
     fn load_replace_clear_flow_is_supported_for_a_slot() {
+        let first_path = temp_test_path("first.mid");
+        let second_path = temp_test_path("second.mid");
+
         let loader = Arc::new(StubLoader::new(vec![
             Ok(sample_reference_data(4, 12, 60, 72, "first")),
             Ok(sample_reference_data(8, 24, 55, 79, "second")),
@@ -316,7 +319,7 @@ mod tests {
         let loaded = use_case
             .execute(LoadMidiCommand::SetFile {
                 slot: ReferenceSlot::Melody,
-                path: "  /tmp/first.mid  ".to_string(),
+                path: format!("  {}  ", first_path.display()),
             })
             .expect("first load should succeed");
 
@@ -332,7 +335,7 @@ mod tests {
         let replaced = use_case
             .execute(LoadMidiCommand::SetFile {
                 slot: ReferenceSlot::Melody,
-                path: "/tmp/second.mid".to_string(),
+                path: second_path.to_string_lossy().to_string(),
             })
             .expect("second load should succeed");
 
@@ -350,7 +353,7 @@ mod tests {
             .expect("slot should contain a reference after replacement");
         assert_eq!(
             current.file.expect("file metadata must exist").path,
-            "/tmp/second.mid"
+            second_path.to_string_lossy()
         );
         assert_eq!(current.bars, 8);
         assert_eq!(current.note_count, 24);
@@ -370,14 +373,14 @@ mod tests {
         assert!(use_case.slot_reference(ReferenceSlot::Melody).is_none());
         assert!(use_case.snapshot_references().is_empty());
 
-        assert_eq!(
-            loader.seen_paths(),
-            vec!["/tmp/first.mid".to_string(), "/tmp/second.mid".to_string()]
-        );
+        assert_eq!(loader.seen_paths(), vec![first_path, second_path]);
     }
 
     #[test]
     fn load_error_is_propagated_and_existing_slot_is_kept() {
+        let current_path = temp_test_path("current.mid");
+        let broken_path = temp_test_path("broken.mid");
+
         let loader = Arc::new(StubLoader::new(vec![
             Ok(sample_reference_data(4, 8, 60, 67, "ok")),
             Err(MidiLoadError::Parse {
@@ -389,14 +392,14 @@ mod tests {
         use_case
             .execute(LoadMidiCommand::SetFile {
                 slot: ReferenceSlot::Melody,
-                path: "/tmp/current.mid".to_string(),
+                path: current_path.to_string_lossy().to_string(),
             })
             .expect("initial load should succeed");
 
         let error = use_case
             .execute(LoadMidiCommand::SetFile {
                 slot: ReferenceSlot::Melody,
-                path: "/tmp/broken.mid".to_string(),
+                path: broken_path.to_string_lossy().to_string(),
             })
             .expect_err("broken MIDI should surface a load error");
 
@@ -412,7 +415,7 @@ mod tests {
             .expect("existing slot reference should be preserved on load failure");
         assert_eq!(
             current.file.expect("file metadata must exist").path,
-            "/tmp/current.mid"
+            current_path.to_string_lossy()
         );
     }
 
@@ -464,5 +467,9 @@ mod tests {
                 event: format!("Event({event_label})"),
             }],
         }
+    }
+
+    fn temp_test_path(file_name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("sonant-load-midi-use-case-{file_name}"))
     }
 }
