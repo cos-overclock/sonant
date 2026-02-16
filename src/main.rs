@@ -1,9 +1,11 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Context, Entity, IntoElement, Render, Subscription, Task, Timer,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, Entity, ExternalPaths, IntoElement, PathPromptOptions,
+    Render, Subscription, Task, Timer, Window, WindowBounds, WindowOptions, div, prelude::*, px,
+    rgb, size,
 };
 use gpui_component::{
     Disableable, Root,
@@ -12,9 +14,13 @@ use gpui_component::{
     label::Label,
 };
 use sonant::{
-    app::{GenerationJobManager, GenerationJobState, GenerationJobUpdate, GenerationService},
+    app::{
+        GenerationJobManager, GenerationJobState, GenerationJobUpdate, GenerationService,
+        LoadMidiCommand, LoadMidiUseCase,
+    },
     domain::{
         GenerationMode, GenerationParams, GenerationRequest, GenerationResult, LlmError, ModelRef,
+        ReferenceSlot,
     },
     infra::llm::{AnthropicProvider, LlmProvider, OpenAiCompatibleProvider, ProviderRegistry},
 };
@@ -28,7 +34,7 @@ use cocoa::{
 };
 
 const HELPER_WINDOW_WIDTH: f32 = 700.0;
-const HELPER_WINDOW_HEIGHT: f32 = 520.0;
+const HELPER_WINDOW_HEIGHT: f32 = 640.0;
 const PROMPT_EDITOR_HEIGHT_PX: f32 = 220.0;
 const PROMPT_EDITOR_ROWS: usize = 8;
 const JOB_UPDATE_POLL_INTERVAL_MS: u64 = 50;
@@ -54,6 +60,10 @@ const PROMPT_VALIDATION_MESSAGE: &str = "Prompt must not be empty.";
 const STUB_PROVIDER_NOTICE: &str = "No LLM provider is configured. Set SONANT_ANTHROPIC_API_KEY or SONANT_OPENAI_COMPAT_API_KEY to enable real generation requests.";
 const TEST_API_KEY_BACKEND_NOTICE: &str = "Using API key from helper input for Anthropic backend.";
 const API_KEY_PLACEHOLDER: &str = "Anthropic API key (testing only)";
+const MIDI_SLOT_FILE_PICKER_PROMPT: &str = "Select MIDI File";
+const MIDI_SLOT_DROP_HINT: &str = "Drop a .mid/.midi file here or choose one from the dialog.";
+const MIDI_SLOT_EMPTY_LABEL: &str = "Not set";
+const MIDI_SLOT_DROP_ERROR_MESSAGE: &str = "Drop at least one file to set the MIDI reference.";
 const DEBUG_PROMPT_LOG_ENV: &str = "SONANT_HELPER_DEBUG_PROMPT_LOG";
 const DEBUG_PROMPT_PREVIEW_CHARS: usize = 120;
 
@@ -122,14 +132,17 @@ struct SonantMainWindow {
     _prompt_input_subscription: Subscription,
     api_key_input: Entity<InputState>,
     _api_key_input_subscription: Subscription,
+    load_midi_use_case: Arc<LoadMidiUseCase>,
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     api_key_error: Option<String>,
+    midi_slot_error: Option<String>,
     active_test_api_key: Option<String>,
     startup_notice: Option<String>,
     _update_poll_task: Task<()>,
+    _midi_file_picker_task: Task<()>,
 }
 
 impl SonantMainWindow {
@@ -157,14 +170,17 @@ impl SonantMainWindow {
             _prompt_input_subscription: prompt_input_subscription,
             api_key_input,
             _api_key_input_subscription: api_key_input_subscription,
+            load_midi_use_case: Arc::new(LoadMidiUseCase::new()),
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             api_key_error: None,
+            midi_slot_error: None,
             active_test_api_key: None,
             startup_notice: backend.startup_notice,
             _update_poll_task: Task::ready(()),
+            _midi_file_picker_task: Task::ready(()),
         }
     }
 
@@ -206,7 +222,7 @@ impl SonantMainWindow {
         }
 
         let prompt = self.prompt_input.read(cx).value().to_string();
-        let request = match self.submission_model.prepare_request(prompt) {
+        let mut request = match self.submission_model.prepare_request(prompt) {
             Ok(request) => request,
             Err(LlmError::Validation { .. }) => {
                 self.generation_status = HelperGenerationStatus::Idle;
@@ -224,6 +240,16 @@ impl SonantMainWindow {
                 return;
             }
         };
+
+        request.references = self.load_midi_use_case.snapshot_references();
+        if let Err(error) = request.validate() {
+            self.generation_status = HelperGenerationStatus::Failed {
+                message: error.user_message(),
+            };
+            self.midi_slot_error = Some(error.user_message());
+            cx.notify();
+            return;
+        }
 
         self.generation_status = HelperGenerationStatus::Submitting {
             request_id: request.request_id.clone(),
@@ -258,6 +284,78 @@ impl SonantMainWindow {
                 }
             }
         });
+    }
+
+    fn on_select_midi_file_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(MIDI_SLOT_FILE_PICKER_PROMPT.into()),
+        });
+
+        self._midi_file_picker_task = cx.spawn_in(window, async move |view, window| {
+            let result = receiver.await;
+            let Ok(result) = result else {
+                return;
+            };
+
+            match result {
+                Ok(Some(paths)) => {
+                    if let Some(path) = paths.into_iter().next() {
+                        let path = path.to_string_lossy().to_string();
+                        let _ = view.update_in(window, |view, _window, cx| {
+                            view.set_midi_slot_file(path, cx)
+                        });
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let message = format!("Could not open the file dialog: {error}");
+                    let _ = view.update_in(window, |view, _window, cx| {
+                        view.midi_slot_error = Some(message);
+                        cx.notify();
+                    });
+                }
+            }
+        });
+    }
+
+    fn on_midi_slot_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        let Some(path) = dropped_path_to_load(paths) else {
+            self.midi_slot_error = Some(MIDI_SLOT_DROP_ERROR_MESSAGE.to_string());
+            cx.notify();
+            return;
+        };
+
+        self.set_midi_slot_file(path, cx);
+    }
+
+    fn set_midi_slot_file(&mut self, path: String, cx: &mut Context<Self>) {
+        self.midi_slot_error = None;
+        match self.load_midi_use_case.execute(LoadMidiCommand::SetFile {
+            slot: ReferenceSlot::Melody,
+            path,
+        }) {
+            Ok(_) => cx.notify(),
+            Err(error) => {
+                self.midi_slot_error = Some(error.user_message());
+                cx.notify();
+            }
+        }
+    }
+
+    fn on_clear_midi_slot_clicked(&mut self, cx: &mut Context<Self>) {
+        self.midi_slot_error = None;
+        match self.load_midi_use_case.execute(LoadMidiCommand::ClearSlot {
+            slot: ReferenceSlot::Melody,
+        }) {
+            Ok(_) => cx.notify(),
+            Err(error) => {
+                self.midi_slot_error = Some(error.user_message());
+                cx.notify();
+            }
+        }
     }
 
     fn sync_backend_from_api_key_input(&mut self, cx: &mut Context<Self>) -> Result<(), LlmError> {
@@ -339,6 +437,21 @@ impl Render for SonantMainWindow {
         let status_label = self.generation_status.label();
         let status_color = self.generation_status.color();
         let generating = self.generation_status.is_submitting_or_running();
+        let melody_reference = self
+            .load_midi_use_case
+            .slot_reference(ReferenceSlot::Melody);
+        let melody_file_path = melody_reference
+            .as_ref()
+            .and_then(|reference| reference.file.as_ref())
+            .map(|file| file.path.clone());
+        let melody_file_label = melody_file_path
+            .as_deref()
+            .map(display_file_name_from_path)
+            .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
+        let melody_slot_stats = melody_reference
+            .as_ref()
+            .map(|reference| format!("Bars: {} / Notes: {}", reference.bars, reference.note_count));
+        let melody_slot_set = melody_reference.is_some();
 
         div()
             .size_full()
@@ -350,7 +463,7 @@ impl Render for SonantMainWindow {
             .text_color(rgb(0xf9fafb))
             .child(Label::new("Sonant GPUI Helper"))
             .child(Label::new(
-                "FR-02: Natural-language prompt input wired to generation job manager.",
+                "FR-02/03a: Prompt input and reference MIDI file slot wired to app use cases.",
             ))
             .child(Label::new("API Key (testing)"))
             .child(Input::new(&self.api_key_input).mask_toggle())
@@ -358,6 +471,71 @@ impl Render for SonantMainWindow {
                 div()
                     .text_color(rgb(0xfca5a5))
                     .child(format!("API Key: {message}"))
+            }))
+            .child(Label::new("Reference MIDI (Melody Slot)"))
+            .child(
+                div()
+                    .id("midi-slot-melody")
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .border_1()
+                    .border_color(rgb(0x334155))
+                    .bg(rgb(0x0f172a))
+                    .can_drop(|value, _, _| {
+                        value
+                            .downcast_ref::<ExternalPaths>()
+                            .is_some_and(|paths| !paths.paths().is_empty())
+                    })
+                    .drag_over::<ExternalPaths>(|style, paths, _, _| {
+                        if choose_dropped_midi_path(paths.paths()).is_some() {
+                            style.border_color(rgb(0x67e8f9)).bg(rgb(0x082f49))
+                        } else {
+                            style.border_color(rgb(0xfda4af)).bg(rgb(0x3f1d2e))
+                        }
+                    })
+                    .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                        this.on_midi_slot_drop(paths, cx)
+                    }))
+                    .child(div().child(MIDI_SLOT_DROP_HINT))
+                    .child(div().child(format!("File: {melody_file_label}")))
+                    .children(
+                        melody_slot_stats
+                            .iter()
+                            .map(|stats| div().text_color(rgb(0x93c5fd)).child(stats.clone())),
+                    )
+                    .children(
+                        melody_file_path
+                            .iter()
+                            .map(|path| div().text_color(rgb(0x94a3b8)).child(path.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("midi-slot-select-button")
+                                    .label("Select MIDI File")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.on_select_midi_file_clicked(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("midi-slot-clear-button")
+                                    .label("Clear")
+                                    .disabled(!melody_slot_set)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.on_clear_midi_slot_clicked(cx)
+                                    })),
+                            ),
+                    ),
+            )
+            .children(self.midi_slot_error.iter().map(|message| {
+                div()
+                    .text_color(rgb(0xfca5a5))
+                    .child(format!("Reference MIDI: {message}"))
             }))
             .child(Label::new("Prompt"))
             .child(Input::new(&self.prompt_input).h(px(PROMPT_EDITOR_HEIGHT_PX)))
@@ -725,6 +903,33 @@ fn prompt_preview(prompt: &str, max_chars: usize) -> String {
     preview
 }
 
+fn dropped_path_to_load(paths: &ExternalPaths) -> Option<String> {
+    choose_dropped_midi_path(paths.paths()).map(|path| path.to_string_lossy().to_string())
+}
+
+fn choose_dropped_midi_path(paths: &[PathBuf]) -> Option<PathBuf> {
+    paths
+        .iter()
+        .find(|path| has_supported_midi_extension(path))
+        .cloned()
+        .or_else(|| paths.first().cloned())
+}
+
+fn has_supported_midi_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
+}
+
+fn display_file_name_from_path(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
 fn normalize_api_key_input(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -737,10 +942,12 @@ fn normalize_api_key_input(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PromptSubmissionModel, build_generation_request, normalize_api_key_input,
+        PromptSubmissionModel, build_generation_request, choose_dropped_midi_path,
+        display_file_name_from_path, has_supported_midi_extension, normalize_api_key_input,
         parse_truthy_flag, prompt_preview, validate_prompt_input,
     };
     use sonant::domain::ModelRef;
+    use std::path::{Path, PathBuf};
 
     fn test_model() -> ModelRef {
         ModelRef {
@@ -808,5 +1015,28 @@ mod tests {
     fn prompt_preview_truncates_long_prompts() {
         assert_eq!(prompt_preview("abcdef", 4), "abcd...");
         assert_eq!(prompt_preview("abc", 4), "abc");
+    }
+
+    #[test]
+    fn supported_midi_extension_is_case_insensitive() {
+        assert!(has_supported_midi_extension(Path::new("/tmp/input.mid")));
+        assert!(has_supported_midi_extension(Path::new("/tmp/input.MIDI")));
+        assert!(!has_supported_midi_extension(Path::new("/tmp/input.wav")));
+    }
+
+    #[test]
+    fn dropped_path_selection_prefers_supported_midi_file() {
+        let selected = choose_dropped_midi_path(&[
+            PathBuf::from("/tmp/ignore.txt"),
+            PathBuf::from("/tmp/melody.mid"),
+        ])
+        .expect("a candidate path should be selected");
+        assert_eq!(selected, PathBuf::from("/tmp/melody.mid"));
+    }
+
+    #[test]
+    fn display_file_name_falls_back_when_no_name_exists() {
+        assert_eq!(display_file_name_from_path("/tmp/melody.mid"), "melody.mid");
+        assert_eq!(display_file_name_from_path("melody.mid"), "melody.mid");
     }
 }
