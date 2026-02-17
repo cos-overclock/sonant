@@ -2920,7 +2920,7 @@ impl Render for SonantMainWindow {
                                     .gap_2()
                                     .px(spacing.panel_padding)
                                     .rounded(radius.panel)
-                                    .bg(colors.input_background)
+                                    .bg(colors.surface_background)
                                     .child(
                                         div()
                                             .w(px(112.0))
