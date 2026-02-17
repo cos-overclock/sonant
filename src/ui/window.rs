@@ -1693,14 +1693,18 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .text_size(px(24.0))
-                                    .child(
-                                        Button::new("settings-button")
-                                            .label("⚙")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.on_open_settings_clicked(window, cx)
-                                            })),
-                                    ),
+                                    .id("settings-button")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(radius.control)
+                                    .text_size(px(20.0))
+                                    .text_color(colors.muted_foreground)
+                                    .cursor_pointer()
+                                    .hover(|style| style.text_color(colors.surface_foreground))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.on_open_settings_clicked(window, cx)
+                                    }))
+                                    .child("⚙"),
                             ),
                     ),
             )
