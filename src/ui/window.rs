@@ -41,7 +41,7 @@ use super::utils::{
 use super::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_MODEL, JOB_UPDATE_POLL_INTERVAL_MS,
     MIDI_SLOT_DROP_ERROR_MESSAGE, MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
-    PROMPT_EDITOR_HEIGHT_PX, PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
+    PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
     SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER, SETTINGS_CONTEXT_WINDOW_PLACEHOLDER,
     SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER, SETTINGS_DEFAULT_MODEL_PLACEHOLDER,
     SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
@@ -1741,7 +1741,7 @@ impl Render for SonantMainWindow {
                                     .gap_2()
                                     .child(Self::section_label_with_info("Prompt", colors))
                                     .child(
-                                        div().w_full().h(px(PROMPT_EDITOR_HEIGHT_PX)).child(
+                                        div().w_full().child(
                                             Input::new(&self.prompt_input),
                                         ),
                                     )

@@ -18,7 +18,6 @@ mod window;
 
 const HELPER_WINDOW_WIDTH: f32 = 800.0;
 const HELPER_WINDOW_HEIGHT: f32 = 640.0;
-const PROMPT_EDITOR_HEIGHT_PX: f32 = 120.0;
 const PROMPT_EDITOR_ROWS: usize = 5;
 const JOB_UPDATE_POLL_INTERVAL_MS: u64 = 50;
 
