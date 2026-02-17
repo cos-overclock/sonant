@@ -3053,7 +3053,7 @@ impl Render for SonantMainWindow {
                             .flex_1()
                             .flex()
                             .flex_col()
-                            .gap(spacing.section_gap)
+                            .gap(px(4.0))
                             .overflow_hidden()
                             .child(
                                 div()
