@@ -3058,35 +3058,34 @@ impl Render for SonantMainWindow {
                             .child(
                                 div()
                                     .id("params-toolbar")
-                                    .h(px(64.0))
+                                    .h(px(52.0))
                                     .flex_none()
                                     .flex()
                                     .items_center()
-                                    .gap_2()
-                                    .px(spacing.panel_padding)
+                                    .gap_1()
+                                    .px(spacing.panel_compact_padding)
                                     .rounded(radius.panel)
                                     .bg(colors.surface_background)
                                     .child(
                                         div()
-                                            .w(px(112.0))
+                                            .w(px(96.0))
                                             .h(px(36.0))
                                             .child(Select::new(&self.key_dropdown).placeholder("Key")),
                                     )
                                     .child(
                                         div()
-                                            .w(px(220.0))
+                                            .w(px(184.0))
                                             .h(px(36.0))
                                             .child(Select::new(&self.scale_dropdown).placeholder("Scale")),
                                     )
-                                    .child(div().w(px(1.0)).h(px(28.0)).bg(colors.panel_border))
+                                    .child(div().w(px(1.0)).h(px(24.0)).bg(colors.panel_border))
                                     .child(
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap_1()
                                             .child(
                                                 div()
-                                                    .w(px(120.0))
+                                                    .w(px(96.0))
                                                     .h(px(36.0))
                                                     .child(Input::new(&self.bpm_input)),
                                             ),
