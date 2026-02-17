@@ -6,9 +6,12 @@ pub(super) struct ThemeColors {
     pub(super) surface_background: Hsla,
     pub(super) surface_foreground: Hsla,
     pub(super) panel_background: Hsla,
+    pub(super) input_background: Hsla,
     pub(super) panel_border: Hsla,
     pub(super) panel_active_background: Hsla,
     pub(super) panel_active_border: Hsla,
+    pub(super) primary: Hsla,
+    pub(super) primary_dark: Hsla,
     pub(super) muted_foreground: Hsla,
     pub(super) accent_foreground: Hsla,
     pub(super) success_foreground: Hsla,
@@ -17,6 +20,32 @@ pub(super) struct ThemeColors {
     pub(super) progress_foreground: Hsla,
     pub(super) drop_invalid_border: Hsla,
     pub(super) drop_invalid_background: Hsla,
+    #[allow(dead_code)]
+    pub(super) track_purple: Hsla,
+    #[allow(dead_code)]
+    pub(super) track_blue: Hsla,
+    #[allow(dead_code)]
+    pub(super) track_green: Hsla,
+    #[allow(dead_code)]
+    pub(super) track_red: Hsla,
+    #[allow(dead_code)]
+    pub(super) track_orange: Hsla,
+    #[allow(dead_code)]
+    pub(super) track_cyan: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_primary: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_purple: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_blue: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_green: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_red: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_orange: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_cyan: Hsla,
 }
 
 impl ThemeColors {
@@ -73,12 +102,15 @@ impl Default for SonantTheme {
     fn default() -> Self {
         Self {
             colors: ThemeColors {
-                surface_background: rgb(0x111827).into(),
+                surface_background: rgb(0x101322).into(),
                 surface_foreground: rgb(0xf9fafb).into(),
-                panel_background: rgb(0x0f172a).into(),
-                panel_border: rgb(0x334155).into(),
-                panel_active_background: rgb(0x082f49).into(),
-                panel_active_border: rgb(0x67e8f9).into(),
+                panel_background: rgb(0x161b2e).into(),
+                input_background: rgb(0x1d233b).into(),
+                panel_border: rgb(0x2a3254).into(),
+                panel_active_background: rgb(0x1d233b).into(),
+                panel_active_border: rgb(0x1032e2).into(),
+                primary: rgb(0x1032e2).into(),
+                primary_dark: rgb(0x0b24a8).into(),
                 muted_foreground: rgb(0x94a3b8).into(),
                 accent_foreground: rgb(0x93c5fd).into(),
                 success_foreground: rgb(0x86efac).into(),
@@ -87,6 +119,19 @@ impl Default for SonantTheme {
                 progress_foreground: rgb(0xfbbf24).into(),
                 drop_invalid_border: rgb(0xfda4af).into(),
                 drop_invalid_background: rgb(0x3f1d2e).into(),
+                track_purple: rgb(0xa855f7).into(),
+                track_blue: rgb(0x3b82f6).into(),
+                track_green: rgb(0x22c55e).into(),
+                track_red: rgb(0xef4444).into(),
+                track_orange: rgb(0xf97316).into(),
+                track_cyan: rgb(0x06b6d4).into(),
+                glow_primary: rgb(0x1032e2).into(),
+                glow_purple: rgb(0xa855f7).into(),
+                glow_blue: rgb(0x3b82f6).into(),
+                glow_green: rgb(0x22c55e).into(),
+                glow_red: rgb(0xef4444).into(),
+                glow_orange: rgb(0xf97316).into(),
+                glow_cyan: rgb(0x06b6d4).into(),
             },
             typography: ThemeTypography {
                 font_family: ".SystemUIFont".into(),
@@ -139,12 +184,12 @@ fn apply_to_gpui_component_theme(theme: &SonantTheme, cx: &mut App) {
     component_theme.background = theme.colors.surface_background;
     component_theme.foreground = theme.colors.surface_foreground;
     component_theme.border = theme.colors.panel_border;
-    component_theme.input = theme.colors.panel_border;
+    component_theme.input = theme.colors.input_background;
 
-    component_theme.primary = theme.colors.panel_active_border;
-    component_theme.primary_hover = theme.colors.accent_foreground;
-    component_theme.primary_active = theme.colors.panel_active_border;
-    component_theme.primary_foreground = theme.colors.surface_background;
+    component_theme.primary = theme.colors.primary;
+    component_theme.primary_hover = theme.colors.primary_dark;
+    component_theme.primary_active = theme.colors.primary;
+    component_theme.primary_foreground = theme.colors.surface_foreground;
 
     component_theme.secondary = theme.colors.panel_background;
     component_theme.secondary_hover = theme.colors.panel_active_background;
@@ -172,7 +217,7 @@ fn apply_to_gpui_component_theme(theme: &SonantTheme, cx: &mut App) {
     component_theme.info_foreground = theme.colors.surface_background;
 
     component_theme.muted_foreground = theme.colors.muted_foreground;
-    component_theme.ring = theme.colors.panel_active_border;
+    component_theme.ring = theme.colors.primary;
 
     component_theme.popover = theme.colors.panel_background;
     component_theme.popover_foreground = theme.colors.surface_foreground;
