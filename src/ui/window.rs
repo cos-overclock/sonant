@@ -2011,11 +2011,13 @@ impl Render for SonantMainWindow {
                                                                         .overflow_hidden()
                                                                         .text_size(px(11.0))
                                                                         .text_color(colors.surface_foreground)
-                                                                        .cursor_pointer()
-                                                                        .hover(|s| s.text_color(colors.primary))
-                                                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                                                            this.on_select_midi_file_clicked(slot, row_index, window, cx);
-                                                                        }))
+                                                                        .when(!is_live, |el| {
+                                                                            el.cursor_pointer()
+                                                                                .hover(|s| s.text_color(colors.primary))
+                                                                                .on_click(cx.listener(move |this, _, window, cx| {
+                                                                                    this.on_select_midi_file_clicked(slot, row_index, window, cx);
+                                                                                }))
+                                                                        })
                                                                         .child(source_label),
                                                                 )
                                                                 // Type badge (non-interactive display)
