@@ -310,37 +310,49 @@ impl SonantMainWindow {
     }
 
     fn generation_mode_from_label(label: &str) -> Option<GenerationMode> {
-        match label {
-            "Melody" => Some(GenerationMode::Melody),
-            "Chord Progression" => Some(GenerationMode::ChordProgression),
-            "Drum Pattern" => Some(GenerationMode::DrumPattern),
-            "Bassline" => Some(GenerationMode::Bassline),
-            "Counter Melody" => Some(GenerationMode::CounterMelody),
-            "Harmony" => Some(GenerationMode::Harmony),
-            "Continuation" => Some(GenerationMode::Continuation),
-            _ => None,
-        }
+        // Derive the reverse mapping from the single-sourced label helper
+        let all_modes = [
+            GenerationMode::Melody,
+            GenerationMode::ChordProgression,
+            GenerationMode::DrumPattern,
+            GenerationMode::Bassline,
+            GenerationMode::CounterMelody,
+            GenerationMode::Harmony,
+            GenerationMode::Continuation,
+        ];
+
+        all_modes
+            .iter()
+            .copied()
+            .find(|mode| Self::generation_mode_label(*mode) == label)
     }
 
     fn reference_slot_from_label(label: &str) -> Option<ReferenceSlot> {
-        match label {
-            "Melody" => Some(ReferenceSlot::Melody),
-            "Chord Progression" => Some(ReferenceSlot::ChordProgression),
-            "Drum Pattern" => Some(ReferenceSlot::DrumPattern),
-            "Bassline" => Some(ReferenceSlot::Bassline),
-            "Counter Melody" => Some(ReferenceSlot::CounterMelody),
-            "Harmony" => Some(ReferenceSlot::Harmony),
-            "Continuation Seed" => Some(ReferenceSlot::ContinuationSeed),
-            _ => None,
-        }
+        // Derive the reverse mapping from the single-sourced label helper
+        let all_slots = [
+            ReferenceSlot::Melody,
+            ReferenceSlot::ChordProgression,
+            ReferenceSlot::DrumPattern,
+            ReferenceSlot::Bassline,
+            ReferenceSlot::CounterMelody,
+            ReferenceSlot::Harmony,
+            ReferenceSlot::ContinuationSeed,
+        ];
+
+        all_slots
+            .iter()
+            .copied()
+            .find(|slot| Self::reference_slot_label(*slot) == label)
     }
 
     fn reference_source_from_label(label: &str) -> Option<ReferenceSource> {
-        match label {
-            "File" => Some(ReferenceSource::File),
-            "Live" => Some(ReferenceSource::Live),
-            _ => None,
-        }
+        // Derive the reverse mapping from the single-sourced label helper
+        let all_sources = [ReferenceSource::File, ReferenceSource::Live];
+
+        all_sources
+            .iter()
+            .copied()
+            .find(|source| Self::reference_source_label(*source) == label)
     }
 
     fn sync_dropdowns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
