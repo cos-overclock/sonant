@@ -1693,7 +1693,7 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .text_size(px(18.0))
+                                    .text_size(px(24.0))
                                     .child(
                                         Button::new("settings-button")
                                             .label("⚙")
