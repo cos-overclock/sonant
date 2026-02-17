@@ -65,6 +65,7 @@ pub(super) fn display_file_name_from_path(path: &str) -> String {
         .to_string()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn normalize_api_key_input(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

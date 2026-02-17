@@ -18,8 +18,7 @@ mod window;
 
 const HELPER_WINDOW_WIDTH: f32 = 800.0;
 const HELPER_WINDOW_HEIGHT: f32 = 640.0;
-const PROMPT_EDITOR_HEIGHT_PX: f32 = 220.0;
-const PROMPT_EDITOR_ROWS: usize = 8;
+const PROMPT_EDITOR_ROWS: usize = 5;
 const JOB_UPDATE_POLL_INTERVAL_MS: u64 = 50;
 
 const DEFAULT_BPM: u16 = 120;
@@ -41,8 +40,7 @@ const PROMPT_PLACEHOLDER: &str =
     "Describe what to generate, for example: Bright pop melody in C major with syncopation.";
 const PROMPT_VALIDATION_MESSAGE: &str = "Prompt must not be empty.";
 const STUB_PROVIDER_NOTICE: &str = "No LLM provider is configured. Set SONANT_ANTHROPIC_API_KEY or SONANT_OPENAI_COMPAT_API_KEY to enable real generation requests.";
-const TEST_API_KEY_BACKEND_NOTICE: &str = "Using API key from helper input for Anthropic backend.";
-const API_KEY_PLACEHOLDER: &str = "Anthropic API key (testing only)";
+
 const SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER: &str = "Anthropic API key";
 const SETTINGS_OPENAI_API_KEY_PLACEHOLDER: &str = "OpenAI-compatible API key";
 const SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER: &str = "Custom base URL (optional)";

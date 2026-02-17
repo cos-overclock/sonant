@@ -21,27 +21,26 @@ use sonant::{
         MIDI_CHANNEL_MIN, MidiInputRouter,
     },
     domain::{
-        GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary, ReferenceSlot,
-        ReferenceSource, calculate_reference_density_hint, has_supported_midi_extension,
+        GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary, ModelRef,
+        ReferenceSlot, ReferenceSource, calculate_reference_density_hint,
+        has_supported_midi_extension,
     },
 };
 
-use super::backend::{
-    GenerationBackend, build_generation_backend, build_generation_backend_from_api_key,
-};
+use super::backend::build_generation_backend;
 use super::request::PromptSubmissionModel;
 use super::state::{
     HelperGenerationStatus, MidiSlotErrorState, SettingsDraftState, SettingsField, SettingsTab,
     SettingsUiState, mode_reference_requirement, mode_reference_requirement_satisfied,
 };
-use super::theme::SonantTheme;
+use super::theme::{SonantTheme, ThemeColors};
 use super::utils::{
     choose_dropped_midi_path, display_file_name_from_path, dropped_path_to_load,
-    log_generation_request_submission, normalize_api_key_input,
+    log_generation_request_submission,
 };
 use super::{
-    API_KEY_PLACEHOLDER, JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE,
-    MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_HEIGHT_PX,
+    DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_MODEL, JOB_UPDATE_POLL_INTERVAL_MS,
+    MIDI_SLOT_DROP_ERROR_MESSAGE, MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
     PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
     SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER, SETTINGS_CONTEXT_WINDOW_PLACEHOLDER,
     SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER, SETTINGS_DEFAULT_MODEL_PLACEHOLDER,
@@ -61,8 +60,8 @@ pub(super) struct SonantMainWindow {
     _reference_slot_dropdown_subscription: Subscription,
     reference_source_dropdown: Entity<DropdownState>,
     _reference_source_dropdown_subscription: Subscription,
-    api_key_input: Entity<InputState>,
-    _api_key_input_subscription: Subscription,
+    ai_model_dropdown: Entity<DropdownState>,
+    _ai_model_dropdown_subscription: Subscription,
     settings_anthropic_api_key_input: Entity<InputState>,
     _settings_anthropic_api_key_subscription: Subscription,
     settings_openai_api_key_input: Entity<InputState>,
@@ -88,10 +87,8 @@ pub(super) struct SonantMainWindow {
     selected_reference_slot: ReferenceSlot,
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
-    api_key_error: Option<String>,
     input_track_error: Option<String>,
     midi_slot_errors: Vec<MidiSlotErrorState>,
-    active_test_api_key: Option<String>,
     startup_notice: Option<String>,
     _update_poll_task: Task<()>,
     _live_capture_poll_task: Task<()>,
@@ -129,13 +126,10 @@ impl SonantMainWindow {
             window,
             Self::on_reference_source_dropdown_event,
         );
-        let api_key_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(API_KEY_PLACEHOLDER)
-                .masked(true)
-        });
-        let api_key_input_subscription =
-            cx.subscribe_in(&api_key_input, window, Self::on_api_key_input_event);
+        let ai_model_dropdown =
+            cx.new(|cx| SelectState::new(Self::ai_model_dropdown_items(), None, window, cx));
+        let ai_model_dropdown_subscription =
+            cx.subscribe_in(&ai_model_dropdown, window, Self::on_ai_model_dropdown_event);
         let settings_anthropic_api_key_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER)
@@ -198,8 +192,8 @@ impl SonantMainWindow {
             _reference_slot_dropdown_subscription: reference_slot_dropdown_subscription,
             reference_source_dropdown,
             _reference_source_dropdown_subscription: reference_source_dropdown_subscription,
-            api_key_input,
-            _api_key_input_subscription: api_key_input_subscription,
+            ai_model_dropdown,
+            _ai_model_dropdown_subscription: ai_model_dropdown_subscription,
             settings_anthropic_api_key_input,
             _settings_anthropic_api_key_subscription: settings_anthropic_api_key_subscription,
             settings_openai_api_key_input,
@@ -225,10 +219,8 @@ impl SonantMainWindow {
             selected_reference_slot: ReferenceSlot::Melody,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
-            api_key_error: None,
             input_track_error: live_input_error,
             midi_slot_errors: Vec::new(),
-            active_test_api_key: None,
             startup_notice: backend.startup_notice,
             _update_poll_task: Task::ready(()),
             _live_capture_poll_task: Task::ready(()),
@@ -251,18 +243,6 @@ impl SonantMainWindow {
         cx: &mut Context<Self>,
     ) {
         if matches!(event, InputEvent::Change) && self.validation_error.take().is_some() {
-            cx.notify();
-        }
-    }
-
-    fn on_api_key_input_event(
-        &mut self,
-        _state: &Entity<InputState>,
-        event: &InputEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(event, InputEvent::Change) && self.api_key_error.take().is_some() {
             cx.notify();
         }
     }
@@ -371,6 +351,16 @@ impl SonantMainWindow {
         self.reference_source_dropdown.update(cx, |state, cx| {
             state.set_selected_value(&source_label, window, cx);
         });
+
+        let model_id = self.settings_ui_state.saved().default_model.as_str();
+        let model_label = Self::ai_model_dropdown_items()
+            .into_iter()
+            .find(|item| *item == model_id);
+        if let Some(label) = model_label {
+            self.ai_model_dropdown.update(cx, |state, cx| {
+                state.set_selected_value(&label, window, cx);
+            });
+        }
     }
 
     fn on_generation_mode_dropdown_event(
@@ -426,6 +416,32 @@ impl SonantMainWindow {
 
         self.on_reference_source_selected(self.selected_reference_slot, source, cx);
         self.sync_dropdowns(window, cx);
+    }
+
+    fn on_ai_model_dropdown_event(
+        &mut self,
+        _state: &Entity<DropdownState>,
+        event: &SelectEvent<Vec<&'static str>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(selected) = event;
+        let Some(selected) = selected.as_deref() else {
+            return;
+        };
+        let provider = if selected == DEFAULT_ANTHROPIC_MODEL {
+            "anthropic"
+        } else {
+            "openai_compatible"
+        };
+        let model_ref = ModelRef {
+            provider: provider.to_string(),
+            model: selected.to_string(),
+        };
+        self.submission_model.set_model(model_ref);
+        self.settings_ui_state
+            .update_draft_field(SettingsField::DefaultModel, selected);
+        cx.notify();
     }
 
     fn on_open_settings_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -544,16 +560,6 @@ impl SonantMainWindow {
 
     fn on_generate_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.validation_error = None;
-        self.api_key_error = None;
-
-        if let Err(error) = self.sync_backend_from_api_key_input(cx) {
-            self.generation_status = HelperGenerationStatus::Failed {
-                message: error.user_message(),
-            };
-            self.api_key_error = Some(error.user_message());
-            cx.notify();
-            return;
-        }
 
         let references = self.collect_generation_references();
         if !mode_reference_requirement_satisfied(self.selected_generation_mode, &references) {
@@ -625,6 +631,34 @@ impl SonantMainWindow {
             self.selected_generation_mode = mode;
             cx.notify();
         }
+    }
+
+    fn section_label(text: &str, colors: ThemeColors) -> impl IntoElement {
+        div()
+            .text_size(px(12.0))
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(colors.muted_foreground)
+            .child(text.to_uppercase())
+    }
+
+    fn section_label_with_info(text: &str, colors: ThemeColors) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(Self::section_label(text, colors))
+            .child(
+                div()
+                    .text_size(px(14.0))
+                    .text_color(colors.muted_foreground)
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(colors.primary))
+                    .child("ⓘ"),
+            )
+    }
+
+    fn ai_model_dropdown_items() -> Vec<&'static str> {
+        vec![DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_MODEL]
     }
 
     fn generation_mode_label(mode: GenerationMode) -> &'static str {
@@ -1092,36 +1126,6 @@ impl SonantMainWindow {
         }
     }
 
-    fn sync_backend_from_api_key_input(&mut self, cx: &mut Context<Self>) -> Result<(), LlmError> {
-        let current_input = self.api_key_input_value(cx);
-
-        match current_input {
-            Some(ref api_key) if self.active_test_api_key.as_deref() != Some(api_key) => {
-                let backend = build_generation_backend_from_api_key(api_key)?;
-                self.apply_generation_backend(backend);
-                self.active_test_api_key = Some(api_key.clone());
-            }
-            None if self.active_test_api_key.take().is_some() => {
-                let backend = build_generation_backend();
-                self.apply_generation_backend(backend);
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
-
-    fn api_key_input_value(&self, cx: &App) -> Option<String> {
-        let value = self.api_key_input.read(cx).value();
-        normalize_api_key_input(value.as_ref())
-    }
-
-    fn apply_generation_backend(&mut self, backend: GenerationBackend) {
-        self.generation_job_manager = Arc::clone(&backend.job_manager);
-        self.submission_model.set_model(backend.default_model);
-        self.startup_notice = backend.startup_notice;
-    }
-
     fn poll_generation_updates(&mut self, cx: &mut Context<Self>) -> bool {
         let updates = self.generation_job_manager.drain_updates();
         if !updates.is_empty() {
@@ -1582,7 +1586,6 @@ impl Render for SonantMainWindow {
 
         let provider_status_label = self.settings_ui_state.provider_status.label();
         let provider_status_color = self.settings_ui_state.provider_status.color(colors);
-        let saved_default_model = self.settings_ui_state.saved().default_model.clone();
         let status_label = self.generation_status.label();
         let status_color = self.generation_status.color(colors);
         let generating = self.generation_status.is_submitting_or_running();
@@ -1736,11 +1739,14 @@ impl Render for SonantMainWindow {
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .child(Label::new("Prompt"))
+                                    .child(Self::section_label_with_info("Prompt", colors))
                                     .child(
-                                        div().w_full().h(px(PROMPT_EDITOR_HEIGHT_PX)).child(
-                                            Input::new(&self.prompt_input),
-                                        ),
+                                        div()
+                                            .w_full()
+                                            .min_h(px(96.0))
+                                            .flex()
+                                            .flex_col()
+                                            .child(Input::new(&self.prompt_input).h_full()),
                                     )
                                     .children(self.validation_error.iter().map(|message| {
                                         div()
@@ -1758,7 +1764,7 @@ impl Render for SonantMainWindow {
                                     .pt(spacing.panel_padding)
                                     .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .child(Label::new("Generation Mode"))
+                                    .child(Self::section_label("Generation Mode", colors))
                                     .child(
                                         div().w_full().h(px(36.0)).child(
                                             Select::new(&self.generation_mode_dropdown)
@@ -1794,23 +1800,13 @@ impl Render for SonantMainWindow {
                                     .pt(spacing.panel_padding)
                                     .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .child(Label::new("AI Model"))
-                                    .child(
-                                        div()
-                                            .text_color(colors.accent_foreground)
-                                            .child(format!("{saved_default_model}")),
-                                    )
-                                    .child(Label::new("API Key (testing)"))
+                                    .child(Self::section_label("AI Model", colors))
                                     .child(
                                         div().w_full().h(px(36.0)).child(
-                                            Input::new(&self.api_key_input).mask_toggle(),
+                                            Select::new(&self.ai_model_dropdown)
+                                                .placeholder("Select AI model"),
                                         ),
-                                    )
-                                    .children(self.api_key_error.iter().map(|message| {
-                                        div()
-                                            .text_color(colors.error_foreground)
-                                            .child(format!("API Key: {message}"))
-                                    })),
+                                    ),
                             )
                             .child(
                                 div()
@@ -1822,7 +1818,7 @@ impl Render for SonantMainWindow {
                                     .pt(spacing.panel_padding)
                                     .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .child(Label::new("Input Tracks"))
+                                    .child(Self::section_label("Input Tracks", colors))
                                     .child(Label::new("Reference Slot"))
                                     .child(
                                         div().w_full().h(px(36.0)).child(
@@ -2118,7 +2114,7 @@ impl Render for SonantMainWindow {
                                     .pt(spacing.panel_padding)
                                     .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .child(Label::new("Generated Patterns"))
+                                    .child(Self::section_label("Generated Patterns", colors))
                                     .child(
                                         Button::new("generated-pattern-active")
                                             .label("Pattern 1 (placeholder)")
@@ -2144,7 +2140,7 @@ impl Render for SonantMainWindow {
                                     .pt(spacing.panel_padding)
                                     .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .child(Label::new("Parameter Sliders"))
+                                    .child(Self::section_label("Parameter Sliders", colors))
                                     .child(
                                         div()
                                             .text_color(colors.muted_foreground)
