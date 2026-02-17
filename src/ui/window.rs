@@ -944,6 +944,7 @@ impl SonantMainWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn live_recording_summary_for_slot(&self, slot: ReferenceSlot) -> LiveRecordingSummary {
         let events = self.midi_input_router.snapshot_reference(slot);
         let metrics = self.midi_input_router.reference_metrics(slot);
