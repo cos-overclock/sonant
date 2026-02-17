@@ -669,13 +669,7 @@ impl SonantMainWindow {
                     .rounded(px(999.0))
                     .border_1()
                     .border_color(colors.primary.opacity(0.45))
-                    .bg(colors.glow_primary.opacity(0.1))
-                    .shadow(vec![gpui::BoxShadow {
-                        color: colors.glow_primary.opacity(0.3),
-                        offset: gpui::point(px(0.0), px(0.0)),
-                        blur_radius: px(10.0),
-                        spread_radius: px(0.0),
-                    }])
+                    .bg(colors.input_background)
                     .child(
                         Slider::new(slider)
                             .horizontal()
