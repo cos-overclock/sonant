@@ -16,7 +16,7 @@ mod theme;
 mod utils;
 mod window;
 
-const HELPER_WINDOW_WIDTH: f32 = 700.0;
+const HELPER_WINDOW_WIDTH: f32 = 800.0;
 const HELPER_WINDOW_HEIGHT: f32 = 640.0;
 const PROMPT_EDITOR_HEIGHT_PX: f32 = 220.0;
 const PROMPT_EDITOR_ROWS: usize = 8;

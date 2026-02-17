@@ -1714,7 +1714,7 @@ impl Render for SonantMainWindow {
                     .child(
                         div()
                             .id("left-sidebar")
-                            .w(px(420.0))
+                            .w(px(320.0))
                             .flex_none()
                             .flex()
                             .flex_col()
