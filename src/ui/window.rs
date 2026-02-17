@@ -1700,7 +1700,11 @@ impl Render for SonantMainWindow {
                                     .text_size(px(20.0))
                                     .text_color(colors.muted_foreground)
                                     .cursor_pointer()
-                                    .hover(|style| style.text_color(colors.surface_foreground))
+                                    .hover(|style| {
+                                        style
+                                            .text_color(colors.surface_foreground)
+                                            .bg(colors.input_background)
+                                    })
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.on_open_settings_clicked(window, cx)
                                     }))
