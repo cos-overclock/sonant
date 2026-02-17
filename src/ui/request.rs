@@ -7,10 +7,15 @@ use super::{
     DEFAULT_TOP_P, DEFAULT_VARIATION_COUNT, GPUI_HELPER_REQUEST_ID_PREFIX,
 };
 
+const PARAM_LEVEL_MIN: u8 = 1;
+const PARAM_LEVEL_MAX: u8 = 5;
+
 #[derive(Debug, Clone)]
 pub(super) struct PromptSubmissionModel {
     next_request_number: u64,
     model: ModelRef,
+    density: u8,
+    complexity: u8,
 }
 
 impl PromptSubmissionModel {
@@ -18,6 +23,8 @@ impl PromptSubmissionModel {
         Self {
             next_request_number: 1,
             model,
+            density: clamp_param_level(DEFAULT_DENSITY),
+            complexity: clamp_param_level(DEFAULT_COMPLEXITY),
         }
     }
 
@@ -32,17 +39,36 @@ impl PromptSubmissionModel {
             self.next_request_number
         );
         self.next_request_number = self.next_request_number.saturating_add(1);
-        build_generation_request_with_prompt_validation(
+        let mut request = build_generation_request_with_prompt_validation(
             request_id,
             self.model.clone(),
             mode,
             prompt,
             references,
-        )
+        )?;
+        request.params.density = self.density;
+        request.params.complexity = self.complexity;
+        Ok(request)
     }
 
     pub(super) fn set_model(&mut self, model: ModelRef) {
         self.model = model;
+    }
+
+    pub(super) fn set_density(&mut self, density: u8) {
+        self.density = clamp_param_level(density);
+    }
+
+    pub(super) fn density(&self) -> u8 {
+        self.density
+    }
+
+    pub(super) fn set_complexity(&mut self, complexity: u8) {
+        self.complexity = clamp_param_level(complexity);
+    }
+
+    pub(super) fn complexity(&self) -> u8 {
+        self.complexity
     }
 }
 
@@ -82,4 +108,8 @@ pub(super) fn validate_prompt_input(prompt: &str) -> Result<(), LlmError> {
         return Err(LlmError::validation("prompt must not be empty"));
     }
     Ok(())
+}
+
+fn clamp_param_level(level: u8) -> u8 {
+    level.clamp(PARAM_LEVEL_MIN, PARAM_LEVEL_MAX)
 }
