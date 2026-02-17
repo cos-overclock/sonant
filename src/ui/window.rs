@@ -1692,11 +1692,15 @@ impl Render for SonantMainWindow {
                                     .child(provider_status_label),
                             )
                             .child(
-                                Button::new("settings-button")
-                                    .label("⚙")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.on_open_settings_clicked(window, cx)
-                                    })),
+                                div()
+                                    .text_size(px(18.0))
+                                    .child(
+                                        Button::new("settings-button")
+                                            .label("⚙")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.on_open_settings_clicked(window, cx)
+                                            })),
+                                    ),
                             ),
                     ),
             )
