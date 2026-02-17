@@ -69,6 +69,13 @@ const PARAM_SCALE_OPTIONS: [&str; 7] = [
 ];
 type DropdownState = SelectState<Vec<&'static str>>;
 
+fn parse_bpm_input_value(raw: &str) -> Option<u16> {
+    let parsed = raw.trim().parse::<u16>().ok()?;
+    (PARAM_BPM_MIN..=PARAM_BPM_MAX)
+        .contains(&parsed)
+        .then_some(parsed)
+}
+
 pub(super) struct SonantMainWindow {
     prompt_input: Entity<InputState>,
     _prompt_input_subscription: Subscription,
@@ -487,23 +494,31 @@ impl SonantMainWindow {
         &mut self,
         _state: &Entity<InputState>,
         event: &InputEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(event, InputEvent::Change) {
-            return;
-        }
+        let raw = self.bpm_input.read(cx).value().to_string();
+        let next_bpm = parse_bpm_input_value(&raw);
 
-        let raw = self.bpm_input.read(cx).value().trim().to_string();
-        let Ok(parsed) = raw.parse::<u16>() else {
-            return;
-        };
-        if !(PARAM_BPM_MIN..=PARAM_BPM_MAX).contains(&parsed) {
-            return;
-        }
-        if self.submission_model.bpm() != parsed {
-            self.submission_model.set_bpm(parsed);
-            cx.notify();
+        match event {
+            InputEvent::Change => {
+                if let Some(next_bpm) = next_bpm
+                    && self.submission_model.bpm() != next_bpm
+                {
+                    self.submission_model.set_bpm(next_bpm);
+                    cx.notify();
+                }
+            }
+            InputEvent::Blur | InputEvent::PressEnter { .. } => {
+                if let Some(next_bpm) = next_bpm
+                    && self.submission_model.bpm() != next_bpm
+                {
+                    self.submission_model.set_bpm(next_bpm);
+                }
+                self.sync_bpm_input_from_model(window, cx);
+                cx.notify();
+            }
+            InputEvent::Focus => {}
         }
     }
 
@@ -3035,7 +3050,7 @@ mod tests {
     use super::{
         build_live_reference_summary, collect_live_references,
         first_available_live_channel_for_slot, first_available_live_channel_for_slot_in_model,
-        live_channel_used_by_other_slots, midi_channel_from_status,
+        live_channel_used_by_other_slots, midi_channel_from_status, parse_bpm_input_value,
         preferred_live_channel_for_slot, recording_enabled_for_channel_array,
         resolve_live_channel_mapping_for_slot, summarize_live_recording,
     };
@@ -3341,5 +3356,21 @@ mod tests {
         assert_eq!(midi_channel_from_status(0x80), Some(1));
         assert_eq!(midi_channel_from_status(0xF8), None);
         assert_eq!(midi_channel_from_status(0x20), None);
+    }
+
+    #[test]
+    fn parse_bpm_input_value_accepts_values_in_supported_range() {
+        assert_eq!(parse_bpm_input_value("20"), Some(20));
+        assert_eq!(parse_bpm_input_value("120"), Some(120));
+        assert_eq!(parse_bpm_input_value("300"), Some(300));
+        assert_eq!(parse_bpm_input_value(" 128 "), Some(128));
+    }
+
+    #[test]
+    fn parse_bpm_input_value_rejects_invalid_values() {
+        assert_eq!(parse_bpm_input_value(""), None);
+        assert_eq!(parse_bpm_input_value("abc"), None);
+        assert_eq!(parse_bpm_input_value("19"), None);
+        assert_eq!(parse_bpm_input_value("301"), None);
     }
 }
