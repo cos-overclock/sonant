@@ -40,10 +40,10 @@ use super::utils::{
     log_generation_request_submission,
 };
 use super::{
-    DEFAULT_ANTHROPIC_MODEL, DEFAULT_COMPLEXITY, DEFAULT_DENSITY, DEFAULT_OPENAI_COMPAT_MODEL,
-    JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE, MIDI_SLOT_FILE_PICKER_PROMPT,
-    MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER,
-    PROMPT_VALIDATION_MESSAGE, SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER,
+    BPM_MAX, BPM_MIN, DEFAULT_ANTHROPIC_MODEL, DEFAULT_BPM, DEFAULT_COMPLEXITY, DEFAULT_DENSITY,
+    DEFAULT_OPENAI_COMPAT_MODEL, JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE,
+    MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_ROWS,
+    PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE, SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER,
     SETTINGS_CONTEXT_WINDOW_PLACEHOLDER, SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER,
     SETTINGS_DEFAULT_MODEL_PLACEHOLDER, SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
 };
@@ -53,7 +53,24 @@ const LIVE_CAPTURE_MAX_EVENTS_PER_POLL: usize = 512;
 const PARAM_LEVEL_MIN: u8 = 1;
 const PARAM_LEVEL_MAX: u8 = 5;
 const PARAM_LEVEL_SPAN: u8 = PARAM_LEVEL_MAX - PARAM_LEVEL_MIN;
+const PARAM_KEY_OPTIONS: [&str; 12] = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+];
+const PARAM_SCALE_OPTIONS: [(&str, &str); 7] = [
+    ("Major", "major"),
+    ("Minor (Aeolian)", "Minor (Aeolian)"),
+    ("Dorian", "Dorian"),
+    ("Phrygian", "Phrygian"),
+    ("Lydian", "Lydian"),
+    ("Mixolydian", "Mixolydian"),
+    ("Locrian", "Locrian"),
+];
 type DropdownState = SelectState<Vec<&'static str>>;
+
+fn parse_bpm_input_value(raw: &str) -> Option<u16> {
+    let parsed = raw.trim().parse::<u16>().ok()?;
+    (BPM_MIN..=BPM_MAX).contains(&parsed).then_some(parsed)
+}
 
 pub(super) struct SonantMainWindow {
     prompt_input: Entity<InputState>,
@@ -62,6 +79,12 @@ pub(super) struct SonantMainWindow {
     _generation_mode_dropdown_subscription: Subscription,
     ai_model_dropdown: Entity<DropdownState>,
     _ai_model_dropdown_subscription: Subscription,
+    key_dropdown: Entity<DropdownState>,
+    _key_dropdown_subscription: Subscription,
+    scale_dropdown: Entity<DropdownState>,
+    _scale_dropdown_subscription: Subscription,
+    bpm_input: Entity<InputState>,
+    _bpm_input_subscription: Subscription,
     complexity_slider: Entity<SliderState>,
     _complexity_slider_subscription: Subscription,
     density_slider: Entity<SliderState>,
@@ -127,6 +150,20 @@ impl SonantMainWindow {
             cx.new(|cx| SelectState::new(Self::ai_model_dropdown_items(), None, window, cx));
         let ai_model_dropdown_subscription =
             cx.subscribe_in(&ai_model_dropdown, window, Self::on_ai_model_dropdown_event);
+        let key_dropdown =
+            cx.new(|cx| SelectState::new(Self::key_dropdown_items(), None, window, cx));
+        let key_dropdown_subscription =
+            cx.subscribe_in(&key_dropdown, window, Self::on_key_dropdown_event);
+        let scale_dropdown =
+            cx.new(|cx| SelectState::new(Self::scale_dropdown_items(), None, window, cx));
+        let scale_dropdown_subscription =
+            cx.subscribe_in(&scale_dropdown, window, Self::on_scale_dropdown_event);
+        let bpm_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("BPM (20-300)");
+            state.set_value(DEFAULT_BPM.to_string(), window, cx);
+            state
+        });
+        let bpm_input_subscription = cx.subscribe_in(&bpm_input, window, Self::on_bpm_input_event);
         let complexity_slider = cx.new(|_| {
             SliderState::new()
                 .min(PARAM_LEVEL_MIN as f32)
@@ -205,6 +242,12 @@ impl SonantMainWindow {
             _generation_mode_dropdown_subscription: generation_mode_dropdown_subscription,
             ai_model_dropdown,
             _ai_model_dropdown_subscription: ai_model_dropdown_subscription,
+            key_dropdown,
+            _key_dropdown_subscription: key_dropdown_subscription,
+            scale_dropdown,
+            _scale_dropdown_subscription: scale_dropdown_subscription,
+            bpm_input,
+            _bpm_input_subscription: bpm_input_subscription,
             complexity_slider,
             _complexity_slider_subscription: complexity_slider_subscription,
             density_slider,
@@ -296,6 +339,39 @@ impl SonantMainWindow {
         ]
     }
 
+    fn key_dropdown_items() -> Vec<&'static str> {
+        PARAM_KEY_OPTIONS.to_vec()
+    }
+
+    fn scale_dropdown_items() -> Vec<&'static str> {
+        PARAM_SCALE_OPTIONS
+            .iter()
+            .map(|(label, _value)| *label)
+            .collect()
+    }
+
+    fn scale_label_from_value(value: &str) -> Option<&'static str> {
+        if value.eq_ignore_ascii_case("major") {
+            return Some("Major");
+        }
+
+        PARAM_SCALE_OPTIONS
+            .iter()
+            .find(|(_label, mapped_value)| *mapped_value == value)
+            .map(|(label, _value)| *label)
+    }
+
+    fn scale_value_from_label(label: &str) -> Option<&'static str> {
+        if label.eq_ignore_ascii_case("major") {
+            return Some("major");
+        }
+
+        PARAM_SCALE_OPTIONS
+            .iter()
+            .find(|(mapped_label, _value)| *mapped_label == label)
+            .map(|(_label, value)| *value)
+    }
+
     fn generation_mode_from_label(label: &str) -> Option<GenerationMode> {
         // Derive the reverse mapping from the single-sourced label helper
         let all_modes = [
@@ -328,6 +404,43 @@ impl SonantMainWindow {
             self.ai_model_dropdown.update(cx, |state, cx| {
                 state.set_selected_value(&label, window, cx);
             });
+        }
+
+        let selected_key = Self::key_dropdown_items()
+            .into_iter()
+            .find(|candidate| *candidate == self.submission_model.key());
+        if let Some(selected_key) = selected_key {
+            self.key_dropdown.update(cx, |state, cx| {
+                state.set_selected_value(&selected_key, window, cx);
+            });
+        }
+
+        let selected_scale = Self::scale_label_from_value(self.submission_model.scale());
+        if let Some(selected_scale) = selected_scale {
+            self.scale_dropdown.update(cx, |state, cx| {
+                state.set_selected_value(&selected_scale, window, cx);
+            });
+        }
+
+        self.sync_bpm_input_from_model(window, cx);
+    }
+
+    fn sync_bpm_input_from_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let bpm_value = self.submission_model.bpm().to_string();
+        self.bpm_input.update(cx, |input, cx| {
+            input.set_value(bpm_value, window, cx);
+        });
+    }
+
+    fn reconcile_bpm_input_with_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let raw = self.bpm_input.read(cx).value().to_string();
+        match parse_bpm_input_value(&raw) {
+            Some(next_bpm) => {
+                if self.submission_model.bpm() != next_bpm {
+                    self.submission_model.set_bpm(next_bpm);
+                }
+            }
+            None => self.sync_bpm_input_from_model(window, cx),
         }
     }
 
@@ -372,6 +485,75 @@ impl SonantMainWindow {
         self.settings_ui_state
             .update_draft_field(SettingsField::DefaultModel, selected);
         cx.notify();
+    }
+
+    fn on_key_dropdown_event(
+        &mut self,
+        _state: &Entity<DropdownState>,
+        event: &SelectEvent<Vec<&'static str>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(selected) = event;
+        let Some(selected) = selected.as_deref() else {
+            return;
+        };
+        if self.submission_model.key() != selected {
+            self.submission_model.set_key(selected);
+            cx.notify();
+        }
+    }
+
+    fn on_scale_dropdown_event(
+        &mut self,
+        _state: &Entity<DropdownState>,
+        event: &SelectEvent<Vec<&'static str>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(selected) = event;
+        let Some(selected) = selected.as_deref() else {
+            return;
+        };
+        let Some(scale_value) = Self::scale_value_from_label(selected) else {
+            return;
+        };
+        if self.submission_model.scale() != scale_value {
+            self.submission_model.set_scale(scale_value);
+            cx.notify();
+        }
+    }
+
+    fn on_bpm_input_event(
+        &mut self,
+        _state: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let raw = self.bpm_input.read(cx).value().to_string();
+        let next_bpm = parse_bpm_input_value(&raw);
+
+        match event {
+            InputEvent::Change => {
+                if let Some(next_bpm) = next_bpm
+                    && self.submission_model.bpm() != next_bpm
+                {
+                    self.submission_model.set_bpm(next_bpm);
+                    cx.notify();
+                }
+            }
+            InputEvent::Blur | InputEvent::PressEnter { .. } => {
+                if let Some(next_bpm) = next_bpm
+                    && self.submission_model.bpm() != next_bpm
+                {
+                    self.submission_model.set_bpm(next_bpm);
+                }
+                self.sync_bpm_input_from_model(window, cx);
+                cx.notify();
+            }
+            InputEvent::Focus => {}
+        }
     }
 
     fn on_complexity_slider_event(
@@ -519,6 +701,7 @@ impl SonantMainWindow {
     }
 
     fn on_generate_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reconcile_bpm_input_with_model(window, cx);
         self.validation_error = None;
 
         let references = self.collect_generation_references();
@@ -2779,61 +2962,38 @@ impl Render for SonantMainWindow {
                             .overflow_hidden()
                             .child(
                                 div()
-                                    .id("params-panel")
+                                    .id("params-toolbar")
+                                    .h(px(64.0))
+                                    .flex_none()
                                     .flex()
-                                    .flex_col()
+                                    .items_center()
                                     .gap_2()
-                                    .p(spacing.panel_padding)
+                                    .px(spacing.panel_padding)
                                     .rounded(radius.panel)
-                                    .border_1()
-                                    .border_color(colors.panel_border)
-                                    .bg(colors.panel_background)
-                                    .child(Label::new("Params"))
+                                    .bg(colors.surface_background)
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(Button::new("param-key").label("Key: D#").disabled(true))
-                                            .child(
-                                                Button::new("param-scale")
-                                                    .label("Scale: Minor (Aeolian)")
-                                                    .disabled(true),
-                                            )
-                                            .child(Button::new("param-bpm").label("BPM: 128").disabled(true)),
+                                            .w(px(112.0))
+                                            .h(px(36.0))
+                                            .child(Select::new(&self.key_dropdown).placeholder("Key")),
                                     )
                                     .child(
                                         div()
+                                            .w(px(220.0))
+                                            .h(px(36.0))
+                                            .child(Select::new(&self.scale_dropdown).placeholder("Scale")),
+                                    )
+                                    .child(div().w(px(1.0)).h(px(28.0)).bg(colors.panel_border))
+                                    .child(
+                                        div()
                                             .flex()
                                             .items_center()
-                                            .gap_2()
+                                            .gap_1()
                                             .child(
                                                 div()
-                                                    .id("param-complexity-value")
-                                                    .px_2()
-                                                    .py(px(4.0))
-                                                    .rounded(px(999.0))
-                                                    .border_1()
-                                                    .border_color(colors.panel_border)
-                                                    .text_size(px(11.0))
-                                                    .text_color(colors.muted_foreground)
-                                                    .child(format!(
-                                                        "Complexity: {complexity_percent}%"
-                                                    )),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("param-note-density-value")
-                                                    .px_2()
-                                                    .py(px(4.0))
-                                                    .rounded(px(999.0))
-                                                    .border_1()
-                                                    .border_color(colors.panel_border)
-                                                    .text_size(px(11.0))
-                                                    .text_color(colors.muted_foreground)
-                                                    .child(format!(
-                                                        "Note Density: {density_percent}%"
-                                                    )),
+                                                    .w(px(120.0))
+                                                    .h(px(36.0))
+                                                    .child(Input::new(&self.bpm_input)),
                                             ),
                                     ),
                             )
@@ -2925,7 +3085,7 @@ mod tests {
     use super::{
         build_live_reference_summary, collect_live_references,
         first_available_live_channel_for_slot, first_available_live_channel_for_slot_in_model,
-        live_channel_used_by_other_slots, midi_channel_from_status,
+        live_channel_used_by_other_slots, midi_channel_from_status, parse_bpm_input_value,
         preferred_live_channel_for_slot, recording_enabled_for_channel_array,
         resolve_live_channel_mapping_for_slot, summarize_live_recording,
     };
@@ -3231,5 +3391,45 @@ mod tests {
         assert_eq!(midi_channel_from_status(0x80), Some(1));
         assert_eq!(midi_channel_from_status(0xF8), None);
         assert_eq!(midi_channel_from_status(0x20), None);
+    }
+
+    #[test]
+    fn parse_bpm_input_value_accepts_values_in_supported_range() {
+        assert_eq!(parse_bpm_input_value("20"), Some(20));
+        assert_eq!(parse_bpm_input_value("120"), Some(120));
+        assert_eq!(parse_bpm_input_value("300"), Some(300));
+        assert_eq!(parse_bpm_input_value(" 128 "), Some(128));
+    }
+
+    #[test]
+    fn parse_bpm_input_value_rejects_invalid_values() {
+        assert_eq!(parse_bpm_input_value(""), None);
+        assert_eq!(parse_bpm_input_value("abc"), None);
+        assert_eq!(parse_bpm_input_value("19"), None);
+        assert_eq!(parse_bpm_input_value("301"), None);
+    }
+
+    #[test]
+    fn scale_mapping_uses_major_display_label_for_canonical_major_value() {
+        assert_eq!(
+            super::SonantMainWindow::scale_label_from_value("major"),
+            Some("Major")
+        );
+        assert_eq!(
+            super::SonantMainWindow::scale_label_from_value("Major"),
+            Some("Major")
+        );
+    }
+
+    #[test]
+    fn scale_mapping_normalizes_major_display_label_to_canonical_major_value() {
+        assert_eq!(
+            super::SonantMainWindow::scale_value_from_label("Major"),
+            Some("major")
+        );
+        assert_eq!(
+            super::SonantMainWindow::scale_value_from_label("major"),
+            Some("major")
+        );
     }
 }
