@@ -9,11 +9,18 @@ use super::{
 
 const PARAM_LEVEL_MIN: u8 = 1;
 const PARAM_LEVEL_MAX: u8 = 5;
+const BPM_MIN: u16 = 20;
+const BPM_MAX: u16 = 300;
+const DEFAULT_KEY: &str = "C";
+const DEFAULT_SCALE: &str = "Major";
 
 #[derive(Debug, Clone)]
 pub(super) struct PromptSubmissionModel {
     next_request_number: u64,
     model: ModelRef,
+    bpm: u16,
+    key: String,
+    scale: String,
     density: u8,
     complexity: u8,
 }
@@ -23,6 +30,9 @@ impl PromptSubmissionModel {
         Self {
             next_request_number: 1,
             model,
+            bpm: clamp_bpm(DEFAULT_BPM),
+            key: DEFAULT_KEY.to_string(),
+            scale: DEFAULT_SCALE.to_string(),
             density: clamp_param_level(DEFAULT_DENSITY),
             complexity: clamp_param_level(DEFAULT_COMPLEXITY),
         }
@@ -46,6 +56,9 @@ impl PromptSubmissionModel {
             prompt,
             references,
         )?;
+        request.params.bpm = self.bpm;
+        request.params.key = self.key.clone();
+        request.params.scale = self.scale.clone();
         request.params.density = self.density;
         request.params.complexity = self.complexity;
         Ok(request)
@@ -53,6 +66,34 @@ impl PromptSubmissionModel {
 
     pub(super) fn set_model(&mut self, model: ModelRef) {
         self.model = model;
+    }
+
+    pub(super) fn set_bpm(&mut self, bpm: u16) {
+        self.bpm = clamp_bpm(bpm);
+    }
+
+    pub(super) fn bpm(&self) -> u16 {
+        self.bpm
+    }
+
+    pub(super) fn set_key(&mut self, key: &str) {
+        if !key.trim().is_empty() {
+            self.key = key.to_string();
+        }
+    }
+
+    pub(super) fn key(&self) -> &str {
+        self.key.as_str()
+    }
+
+    pub(super) fn set_scale(&mut self, scale: &str) {
+        if !scale.trim().is_empty() {
+            self.scale = scale.to_string();
+        }
+    }
+
+    pub(super) fn scale(&self) -> &str {
+        self.scale.as_str()
     }
 
     pub(super) fn set_density(&mut self, density: u8) {
@@ -90,8 +131,8 @@ pub(super) fn build_generation_request_with_prompt_validation(
         prompt,
         params: GenerationParams {
             bpm: DEFAULT_BPM,
-            key: "C".to_string(),
-            scale: "major".to_string(),
+            key: DEFAULT_KEY.to_string(),
+            scale: DEFAULT_SCALE.to_string(),
             density: DEFAULT_DENSITY,
             complexity: DEFAULT_COMPLEXITY,
             temperature: Some(DEFAULT_TEMPERATURE),
@@ -112,4 +153,8 @@ pub(super) fn validate_prompt_input(prompt: &str) -> Result<(), LlmError> {
 
 fn clamp_param_level(level: u8) -> u8 {
     level.clamp(PARAM_LEVEL_MIN, PARAM_LEVEL_MAX)
+}
+
+fn clamp_bpm(bpm: u16) -> u16 {
+    bpm.clamp(BPM_MIN, BPM_MAX)
 }

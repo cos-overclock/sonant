@@ -268,15 +268,21 @@ mod tests {
     }
 
     #[test]
-    fn submission_model_applies_updated_density_and_complexity() {
+    fn submission_model_applies_updated_parameter_values() {
         let mut model = PromptSubmissionModel::new(test_model());
         model.set_density(5);
         model.set_complexity(4);
+        model.set_bpm(134);
+        model.set_key("D#");
+        model.set_scale("Minor (Aeolian)");
 
         let request = model
             .prepare_request(GenerationMode::Melody, "prompt".to_string(), Vec::new())
             .expect("request should be prepared");
 
+        assert_eq!(request.params.bpm, 134);
+        assert_eq!(request.params.key, "D#");
+        assert_eq!(request.params.scale, "Minor (Aeolian)");
         assert_eq!(request.params.density, 5);
         assert_eq!(request.params.complexity, 4);
     }
@@ -289,6 +295,16 @@ mod tests {
 
         assert_eq!(model.density(), 1);
         assert_eq!(model.complexity(), 5);
+    }
+
+    #[test]
+    fn submission_model_clamps_bpm_range() {
+        let mut model = PromptSubmissionModel::new(test_model());
+        model.set_bpm(1);
+        assert_eq!(model.bpm(), 20);
+
+        model.set_bpm(999);
+        assert_eq!(model.bpm(), 300);
     }
 
     #[test]
