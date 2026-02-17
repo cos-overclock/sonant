@@ -8,7 +8,7 @@ use sonant::{
 
 use super::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_MODEL, STUB_MODEL_ID, STUB_PROVIDER_ID,
-    STUB_PROVIDER_NOTICE, TEST_API_KEY_BACKEND_NOTICE,
+    STUB_PROVIDER_NOTICE,
 };
 
 pub(super) struct GenerationBackend {
@@ -47,26 +47,6 @@ pub(super) fn build_generation_backend() -> GenerationBackend {
             .expect("default model must be configured when at least one provider exists"),
         startup_notice: (!notices.is_empty()).then(|| notices.join(" ")),
     }
-}
-
-pub(super) fn build_generation_backend_from_api_key(
-    api_key: &str,
-) -> Result<GenerationBackend, LlmError> {
-    let mut registry = ProviderRegistry::new();
-    let provider = AnthropicProvider::from_api_key(api_key.to_string())?;
-    registry.register(provider)?;
-
-    let service = GenerationService::new(registry);
-    let manager = GenerationJobManager::new(service)?;
-
-    Ok(GenerationBackend {
-        job_manager: Arc::new(manager),
-        default_model: ModelRef {
-            provider: "anthropic".to_string(),
-            model: DEFAULT_ANTHROPIC_MODEL.to_string(),
-        },
-        startup_notice: Some(TEST_API_KEY_BACKEND_NOTICE.to_string()),
-    })
 }
 
 fn register_anthropic_provider(
