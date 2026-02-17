@@ -3063,7 +3063,7 @@ impl Render for SonantMainWindow {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .px(spacing.panel_compact_padding)
+                                    .pr(spacing.panel_compact_padding)
                                     .rounded(radius.panel)
                                     .bg(colors.surface_background)
                                     .child(
