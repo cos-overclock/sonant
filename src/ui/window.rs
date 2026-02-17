@@ -82,6 +82,7 @@ pub(super) struct SonantMainWindow {
     selected_generation_mode: GenerationMode,
     visible_slot_rows: Vec<ReferenceSlot>,
     add_track_menu_open: bool,
+    channel_menu_open: Option<usize>, // row_index of the row whose channel menu is open
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     input_track_error: Option<String>,
@@ -197,6 +198,7 @@ impl SonantMainWindow {
             selected_generation_mode: GenerationMode::Melody,
             visible_slot_rows: vec![],
             add_track_menu_open: false,
+            channel_menu_open: None,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             input_track_error: live_input_error,
@@ -752,17 +754,21 @@ impl SonantMainWindow {
         cx.notify();
     }
 
-    fn on_live_channel_changed(&mut self, slot: ReferenceSlot, delta: i8, cx: &mut Context<Self>) {
-        let current = self.channel_mapping_for_slot(slot).unwrap_or(1);
-        let next = current as i8 + delta;
-        let next = next.clamp(MIDI_CHANNEL_MIN as i8, MIDI_CHANNEL_MAX as i8) as u8;
-        if next == current {
-            return;
-        }
-        if let Err(error) = self.input_track_model.set_channel_mapping(ChannelMapping {
-            slot,
-            channel: next,
-        }) {
+    fn on_channel_menu_toggled(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        self.channel_menu_open = if self.channel_menu_open == Some(row_index) {
+            None
+        } else {
+            Some(row_index)
+        };
+        cx.notify();
+    }
+
+    fn on_channel_selected(&mut self, slot: ReferenceSlot, channel: u8, cx: &mut Context<Self>) {
+        self.channel_menu_open = None;
+        if let Err(error) = self
+            .input_track_model
+            .set_channel_mapping(ChannelMapping { slot, channel })
+        {
             self.input_track_error = Some(error.to_string());
         } else if let Err(error) = self.sync_midi_input_router_config() {
             self.input_track_error = Some(error);
@@ -1745,6 +1751,7 @@ impl Render for SonantMainWindow {
                                 {
                                 let visible_slot_rows = self.visible_slot_rows.clone();
                                 let add_menu_open = self.add_track_menu_open;
+                                let channel_menu_open = self.channel_menu_open;
                                 let has_visible = !visible_slot_rows.is_empty();
 
                                 div()
@@ -1994,7 +2001,7 @@ impl Render for SonantMainWindow {
                                                                 .flex_none()
                                                                 .bg(slot_color),
                                                         )
-                                                        // Source label + type badge
+                                                        // Source label + type badge (always clickable)
                                                         .child(
                                                             div()
                                                                 .flex_1()
@@ -2011,13 +2018,15 @@ impl Render for SonantMainWindow {
                                                                         .overflow_hidden()
                                                                         .text_size(px(11.0))
                                                                         .text_color(colors.surface_foreground)
-                                                                        .when(!is_live, |el| {
-                                                                            el.cursor_pointer()
-                                                                                .hover(|s| s.text_color(colors.primary))
-                                                                                .on_click(cx.listener(move |this, _, window, cx| {
-                                                                                    this.on_select_midi_file_clicked(slot, row_index, window, cx);
-                                                                                }))
-                                                                        })
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.text_color(colors.primary))
+                                                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                                                            if is_live {
+                                                                                this.on_channel_menu_toggled(row_index, cx);
+                                                                            } else {
+                                                                                this.on_select_midi_file_clicked(slot, row_index, window, cx);
+                                                                            }
+                                                                        }))
                                                                         .child(source_label),
                                                                 )
                                                                 // Type badge (non-interactive display)
@@ -2035,7 +2044,7 @@ impl Render for SonantMainWindow {
                                                                         .child(short_label),
                                                                 ),
                                                         )
-                                                        // Action buttons
+                                                        // Action buttons (fixed layout: source toggle + monitor + remove)
                                                         .child(
                                                             div()
                                                                 .flex()
@@ -2054,7 +2063,7 @@ impl Render for SonantMainWindow {
                                                                         .py(px(2.0))
                                                                         .rounded(px(3.0))
                                                                         .text_size(px(9.0))
-                                                                        .text_color(if is_live { colors.primary } else { colors.muted_foreground })
+                                                                        .text_color(if is_live { colors.surface_foreground } else { colors.muted_foreground })
                                                                         .font_weight(gpui::FontWeight::BOLD)
                                                                         .cursor_pointer()
                                                                         .hover(|s| s.text_color(colors.surface_foreground).bg(colors.input_background))
@@ -2063,79 +2072,31 @@ impl Render for SonantMainWindow {
                                                                         }))
                                                                         .child(if is_live { "LIVE" } else { "FILE" }),
                                                                 )
-                                                                // LIVE mode: channel selector + monitoring toggle
-                                                                .when(is_live, |el| {
-                                                                    el
-                                                                    // Channel decrement
-                                                                    .child(
-                                                                        div()
-                                                                            .id(("slot-ch-dec", row_index))
-                                                                            .w(px(16.0))
-                                                                            .h(px(20.0))
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .justify_center()
-                                                                            .rounded(px(3.0))
-                                                                            .text_size(px(10.0))
-                                                                            .text_color(if live_ch > MIDI_CHANNEL_MIN { colors.muted_foreground } else { colors.panel_border })
-                                                                            .cursor_pointer()
-                                                                            .hover(|s| s.text_color(colors.surface_foreground))
-                                                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                                                this.on_live_channel_changed(slot, -1, cx);
-                                                                            }))
-                                                                            .child("◀"),
-                                                                    )
-                                                                    // Channel number display
-                                                                    .child(
-                                                                        div()
-                                                                            .w(px(20.0))
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .justify_center()
-                                                                            .text_size(px(10.0))
-                                                                            .font_weight(gpui::FontWeight::BOLD)
-                                                                            .text_color(colors.surface_foreground)
-                                                                            .child(format!("{live_ch}")),
-                                                                    )
-                                                                    // Channel increment
-                                                                    .child(
-                                                                        div()
-                                                                            .id(("slot-ch-inc", row_index))
-                                                                            .w(px(16.0))
-                                                                            .h(px(20.0))
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .justify_center()
-                                                                            .rounded(px(3.0))
-                                                                            .text_size(px(10.0))
-                                                                            .text_color(if live_ch < MIDI_CHANNEL_MAX { colors.muted_foreground } else { colors.panel_border })
-                                                                            .cursor_pointer()
-                                                                            .hover(|s| s.text_color(colors.surface_foreground))
-                                                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                                                this.on_live_channel_changed(slot, 1, cx);
-                                                                            }))
-                                                                            .child("▶"),
-                                                                    )
-                                                                    // Monitoring toggle
-                                                                    .child(
-                                                                        div()
-                                                                            .id(("slot-monitor", row_index))
-                                                                            .w(px(20.0))
-                                                                            .h(px(20.0))
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .justify_center()
-                                                                            .rounded(px(999.0))
-                                                                            .text_size(px(12.0))
-                                                                            .text_color(if monitoring_on { colors.error_foreground } else { colors.muted_foreground })
-                                                                            .cursor_pointer()
-                                                                            .hover(|s| s.text_color(colors.surface_foreground))
-                                                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                                                this.on_recording_channel_toggled(live_ch, cx);
-                                                                            }))
-                                                                            .child("●"),
-                                                                    )
-                                                                })
+                                                                // Monitoring toggle (LIVE only)
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-monitor", row_index))
+                                                                        .w(px(20.0))
+                                                                        .h(px(20.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .rounded(px(999.0))
+                                                                        .text_size(px(12.0))
+                                                                        .text_color(if is_live {
+                                                                            if monitoring_on { colors.error_foreground } else { colors.muted_foreground }
+                                                                        } else {
+                                                                            colors.panel_border
+                                                                        })
+                                                                        .when(is_live, |el| {
+                                                                            el.cursor_pointer()
+                                                                                .hover(|s| s.text_color(colors.surface_foreground))
+                                                                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                                    this.on_recording_channel_toggled(live_ch, cx);
+                                                                                }))
+                                                                        })
+                                                                        .child("●"),
+                                                                )
                                                                 // Clear file (file source with file loaded)
                                                                 .when(!is_live && slot_has_file, |el| {
                                                                     el.child(
@@ -2199,6 +2160,63 @@ impl Render for SonantMainWindow {
                                                                 })
                                                         }))
                                                 }))
+                                        )
+                                    })
+                                    // Channel selection menu (shown when a LIVE row's label is clicked)
+                                    .when(channel_menu_open.is_some(), |el| {
+                                        let open_row = channel_menu_open.unwrap_or(0);
+                                        let menu_slot = visible_slot_rows.get(open_row).copied().unwrap_or(ReferenceSlot::Melody);
+                                        let current_ch = self.channel_mapping_for_slot(menu_slot).unwrap_or(1);
+                                        el.child(
+                                            div()
+                                                .id("channel-select-menu")
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_active_border)
+                                                .bg(colors.panel_background)
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .px_3()
+                                                        .py(px(6.0))
+                                                        .border_b_1()
+                                                        .border_color(colors.panel_border)
+                                                        .text_size(px(10.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                        .child("SELECT MIDI CHANNEL"),
+                                                )
+                                                .children((MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX).map(|ch| {
+                                                    let is_selected = ch == current_ch;
+                                                    div()
+                                                        .id(("ch-option", ch as usize))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .h(px(28.0))
+                                                        .px_3()
+                                                        .bg(if is_selected { colors.panel_active_background } else { colors.panel_background })
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(colors.panel_active_background))
+                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                            this.on_channel_selected(menu_slot, ch, cx);
+                                                        }))
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(11.0))
+                                                                .text_color(if is_selected { colors.surface_foreground } else { colors.muted_foreground })
+                                                                .font_weight(if is_selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                                                .child(format!("Channel {ch}")),
+                                                        )
+                                                        .when(is_selected, |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .text_size(px(10.0))
+                                                                    .text_color(colors.primary)
+                                                                    .child("✓"),
+                                                            )
+                                                        })
+                                                })),
                                         )
                                     })
                                     .children(self.input_track_error.iter().map(|message| {
