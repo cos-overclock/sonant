@@ -27,6 +27,7 @@ pub(super) struct ThemeColors {
     pub(super) track_red: Hsla,
     pub(super) track_orange: Hsla,
     pub(super) track_cyan: Hsla,
+    pub(super) track_pink: Hsla,
     pub(super) glow_primary: Hsla,
     #[allow(dead_code)]
     pub(super) glow_purple: Hsla,
@@ -52,7 +53,7 @@ impl ThemeColors {
             ReferenceSlot::Bassline => self.track_red,
             ReferenceSlot::CounterMelody => self.track_orange,
             ReferenceSlot::Harmony => self.track_cyan,
-            ReferenceSlot::ContinuationSeed => self.track_purple,
+            ReferenceSlot::ContinuationSeed => self.track_pink,
         }
     }
 
@@ -133,6 +134,7 @@ impl Default for SonantTheme {
                 track_red: rgb(0xef4444).into(),
                 track_orange: rgb(0xf97316).into(),
                 track_cyan: rgb(0x06b6d4).into(),
+                track_pink: rgb(0xec4899).into(),
                 glow_primary: rgb(0x1032e2).into(),
                 glow_purple: rgb(0xa855f7).into(),
                 glow_blue: rgb(0x3b82f6).into(),
