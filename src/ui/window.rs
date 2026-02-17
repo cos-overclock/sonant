@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, ExternalPaths, IntoElement, PathPromptOptions, Render,
-    Subscription, Task, Timer, Window, div, prelude::*, px,
+    App, AppContext, Context, Entity, ExternalPaths, IntoElement, PathPromptOptions, Pixels,
+    Render, Subscription, Task, Timer, Window, div, prelude::*, px,
 };
 use gpui_component::{
     Disableable,
@@ -65,6 +65,12 @@ const PARAM_SCALE_OPTIONS: [(&str, &str); 7] = [
     ("Mixolydian", "Mixolydian"),
     ("Locrian", "Locrian"),
 ];
+const PIANO_ROLL_KEY_LABEL_WIDTH: f32 = 48.0;
+const PIANO_ROLL_ROW_HEIGHT: f32 = 24.0;
+const PIANO_ROLL_BEAT_WIDTH: f32 = 40.0;
+const PIANO_ROLL_BEAT_COLUMNS: usize = 64;
+const PIANO_ROLL_TOP_MIDI_NOTE: i16 = 84; // C6
+const PIANO_ROLL_BOTTOM_MIDI_NOTE: i16 = 36; // C2
 type DropdownState = SelectState<Vec<&'static str>>;
 
 fn parse_bpm_input_value(raw: &str) -> Option<u16> {
@@ -798,6 +804,92 @@ impl SonantMainWindow {
                     .cursor_pointer()
                     .hover(|style| style.text_color(colors.primary))
                     .child("ⓘ"),
+            )
+    }
+
+    fn piano_roll_is_black_key(midi_note: i16) -> bool {
+        matches!(midi_note.rem_euclid(12), 1 | 3 | 6 | 8 | 10)
+    }
+
+    fn piano_roll_note_label(midi_note: i16) -> Option<String> {
+        let pitch_class = midi_note.rem_euclid(12);
+        if !matches!(pitch_class, 0 | 5) {
+            return None;
+        }
+
+        let octave = (midi_note / 12) - 1;
+        let note_name = if pitch_class == 0 { "C" } else { "F" };
+        Some(format!("{note_name}{octave}"))
+    }
+
+    fn piano_roll_grid(colors: ThemeColors, corner_radius: Pixels) -> impl IntoElement {
+        let grid_width = PIANO_ROLL_BEAT_COLUMNS as f32 * PIANO_ROLL_BEAT_WIDTH;
+        let canvas_width = PIANO_ROLL_KEY_LABEL_WIDTH + grid_width;
+
+        div()
+            .id("piano-roll-grid-frame")
+            .flex_1()
+            .rounded(corner_radius)
+            .border_1()
+            .border_color(colors.panel_border)
+            .bg(colors.surface_background)
+            .overflow_scroll()
+            .scrollbar_width(px(8.0))
+            .child(
+                div()
+                    .id("piano-roll-grid-canvas")
+                    .w(px(canvas_width))
+                    .flex()
+                    .flex_col()
+                    .children(
+                        (PIANO_ROLL_BOTTOM_MIDI_NOTE..=PIANO_ROLL_TOP_MIDI_NOTE)
+                            .rev()
+                            .map(|midi_note| {
+                                let note_label =
+                                    Self::piano_roll_note_label(midi_note).unwrap_or_default();
+                                let has_label = !note_label.is_empty();
+
+                                div()
+                                    .h(px(PIANO_ROLL_ROW_HEIGHT))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .border_b_1()
+                                    .border_color(colors.piano_roll_grid_line)
+                                    .bg(if Self::piano_roll_is_black_key(midi_note) {
+                                        colors.surface_foreground.opacity(0.05)
+                                    } else {
+                                        colors.surface_background.opacity(0.0)
+                                    })
+                                    .child(
+                                        div()
+                                            .w(px(PIANO_ROLL_KEY_LABEL_WIDTH))
+                                            .h_full()
+                                            .flex_none()
+                                            .pr(px(6.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_end()
+                                            .text_size(px(10.0))
+                                            .text_color(if has_label {
+                                                colors.muted_foreground
+                                            } else {
+                                                colors.muted_foreground.opacity(0.35)
+                                            })
+                                            .child(note_label),
+                                    )
+                                    .child(div().h_full().flex().flex_1().children(
+                                        (0..PIANO_ROLL_BEAT_COLUMNS).map(|_| {
+                                            div()
+                                                .h_full()
+                                                .w(px(PIANO_ROLL_BEAT_WIDTH))
+                                                .flex_none()
+                                                .border_l_1()
+                                                .border_color(colors.piano_roll_grid_line)
+                                        }),
+                                    ))
+                            }),
+                    ),
             )
     }
 
@@ -3011,19 +3103,7 @@ impl Render for SonantMainWindow {
                                     .border_color(colors.panel_border)
                                     .bg(colors.panel_background)
                                     .child(Label::new("Piano Roll"))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .rounded(radius.control)
-                                            .border_1()
-                                            .border_color(colors.panel_border)
-                                            .bg(colors.surface_background)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_color(colors.muted_foreground)
-                                            .child("Piano Roll Placeholder"),
-                                    ),
+                                    .child(Self::piano_roll_grid(colors, radius.control)),
                             )
                             .child(
                                 div()
@@ -3407,6 +3487,35 @@ mod tests {
         assert_eq!(parse_bpm_input_value("abc"), None);
         assert_eq!(parse_bpm_input_value("19"), None);
         assert_eq!(parse_bpm_input_value("301"), None);
+    }
+
+    #[test]
+    fn piano_roll_note_label_marks_c_and_f_notes() {
+        assert_eq!(
+            super::SonantMainWindow::piano_roll_note_label(60),
+            Some("C4".to_string())
+        );
+        assert_eq!(
+            super::SonantMainWindow::piano_roll_note_label(53),
+            Some("F3".to_string())
+        );
+        assert_eq!(
+            super::SonantMainWindow::piano_roll_note_label(48),
+            Some("C3".to_string())
+        );
+        assert_eq!(
+            super::SonantMainWindow::piano_roll_note_label(41),
+            Some("F2".to_string())
+        );
+        assert_eq!(super::SonantMainWindow::piano_roll_note_label(61), None);
+    }
+
+    #[test]
+    fn piano_roll_black_key_detection_matches_pitch_classes() {
+        assert!(super::SonantMainWindow::piano_roll_is_black_key(61)); // C#
+        assert!(super::SonantMainWindow::piano_roll_is_black_key(63)); // D#
+        assert!(!super::SonantMainWindow::piano_roll_is_black_key(60)); // C
+        assert!(!super::SonantMainWindow::piano_roll_is_black_key(65)); // F
     }
 
     #[test]
