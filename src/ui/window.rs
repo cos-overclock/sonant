@@ -520,10 +520,6 @@ impl SonantMainWindow {
         }
     }
 
-    fn input_track_row_id(slot: ReferenceSlot) -> (&'static str, usize) {
-        ("input-track-row", Self::reference_slot_index(slot))
-    }
-
     fn input_track_source_button_id(
         slot: ReferenceSlot,
         source: ReferenceSource,
@@ -539,10 +535,6 @@ impl SonantMainWindow {
             "input-track-channel",
             Self::reference_slot_index(slot) * 100 + usize::from(channel),
         )
-    }
-
-    fn input_track_slot_select_button_id(slot: ReferenceSlot) -> (&'static str, usize) {
-        ("input-track-select", Self::reference_slot_index(slot))
     }
 
     fn recording_channel_button_id(channel: u8) -> (&'static str, usize) {
@@ -1458,15 +1450,14 @@ impl Render for SonantMainWindow {
         let status_color = self.generation_status.color(colors);
         let generating = self.generation_status.is_submitting_or_running();
         let selected_mode_label = Self::generation_mode_label(self.selected_generation_mode);
-        let selected_reference_slot_label =
-            Self::reference_slot_label(self.selected_reference_slot);
-        let selected_reference_source = self.source_for_slot(self.selected_reference_slot);
+        let selected_slot = self.selected_reference_slot;
+        let selected_reference_slot_label = Self::reference_slot_label(selected_slot);
+        let selected_reference_source = self.source_for_slot(selected_slot);
         let selected_reference_source_label =
             Self::reference_source_label(selected_reference_source);
-        let selected_live_channel = self.channel_mapping_for_slot(self.selected_reference_slot);
+        let selected_live_channel = self.channel_mapping_for_slot(selected_slot);
         let selected_slot_accepts_file_drop = selected_reference_source == ReferenceSource::File;
-        let selected_live_recording_summary =
-            self.live_recording_summary_for_slot(self.selected_reference_slot);
+        let selected_live_recording_summary = self.live_recording_summary_for_slot(selected_slot);
         let file_references = self.load_midi_use_case.snapshot_references();
         let generation_references = self.collect_generation_references();
         let live_channel_mappings = self.input_track_model.live_channel_mappings();
@@ -1477,13 +1468,11 @@ impl Render for SonantMainWindow {
         );
         let selected_slot_references: Vec<&_> = file_references
             .iter()
-            .filter(|reference| reference.slot == self.selected_reference_slot)
+            .filter(|reference| reference.slot == selected_slot)
             .collect();
         let selected_slot_reference_count = selected_slot_references.len();
         let selected_slot_set = selected_slot_reference_count > 0;
-        let selected_slot_error = self
-            .midi_slot_error_for_slot(self.selected_reference_slot)
-            .cloned();
+        let selected_slot_error = self.midi_slot_error_for_slot(selected_slot).cloned();
         let mode_button = |id: &'static str, mode: GenerationMode| {
             let button = Button::new(id)
                 .label(Self::generation_mode_label(mode))
@@ -1502,7 +1491,19 @@ impl Render for SonantMainWindow {
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.on_reference_slot_selected(slot, cx)
                 }));
-            if self.selected_reference_slot == slot {
+            if selected_slot == slot {
+                button.primary()
+            } else {
+                button
+            }
+        };
+        let source_button = |source: ReferenceSource, label: &'static str| {
+            let button = Button::new(Self::input_track_source_button_id(selected_slot, source))
+                .label(label)
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    this.on_reference_source_selected(selected_slot, source, cx)
+                }));
+            if selected_reference_source == source {
                 button.primary()
             } else {
                 button
@@ -1521,26 +1522,45 @@ impl Render for SonantMainWindow {
             .text_color(colors.surface_foreground)
             .child(
                 div()
-                    .id("main-header")
+                    .id("main_header")
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(spacing.section_gap)
+                    .p(spacing.panel_padding)
+                    .rounded(radius.panel)
+                    .border_1()
+                    .border_color(colors.panel_border)
+                    .bg(colors.panel_background)
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new("Sonant GPUI Helper"))
+                            .items_center()
+                            .gap_2()
                             .child(
-                                div().text_color(colors.muted_foreground).child(
-                                    "FR-05 helper UI + FR-09 state foundation (settings transition/diff).",
-                                ),
+                                div()
+                                    .w(px(28.0))
+                                    .h(px(28.0))
+                                    .rounded(radius.control)
+                                    .border_1()
+                                    .border_color(colors.panel_active_border)
+                                    .bg(colors.panel_active_background)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child("S"),
                             )
                             .child(
                                 div()
-                                    .text_color(colors.accent_foreground)
-                                    .child(format!("Saved Default Model: {saved_default_model}")),
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(Label::new("Sonant"))
+                                    .child(
+                                        div()
+                                            .text_color(colors.muted_foreground)
+                                            .child("FR-09 Main Interface"),
+                                    ),
                             ),
                     )
                     .child(
@@ -1550,12 +1570,18 @@ impl Render for SonantMainWindow {
                             .gap_2()
                             .child(
                                 div()
-                                    .id("api-status-badge")
+                                    .id("api_status_badge")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(radius.control)
+                                    .border_1()
+                                    .border_color(colors.panel_border)
+                                    .bg(colors.surface_background)
                                     .text_color(provider_status_color)
                                     .child(provider_status_label),
                             )
                             .child(
-                                Button::new("settings-button")
+                                Button::new("settings_button")
                                     .label("Settings")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.on_open_settings_clicked(window, cx)
@@ -1563,674 +1589,686 @@ impl Render for SonantMainWindow {
                             ),
                     ),
             )
-            .child(Label::new("API Key (testing)"))
-            .child(Input::new(&self.api_key_input).mask_toggle())
-            .children(self.api_key_error.iter().map(|message| {
-                div()
-                    .text_color(colors.error_foreground)
-                    .child(format!("API Key: {message}"))
-            }))
-            .child(Label::new("Generation Mode"))
             .child(
                 div()
-                    .id("generation-mode-selector")
+                    .id("main_layout")
                     .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p(spacing.panel_padding)
-                    .rounded(radius.panel)
-                    .border_1()
-                    .border_color(colors.panel_border)
-                    .bg(colors.panel_background)
+                    .gap(spacing.section_gap)
+                    .h_full()
+                    .min_h(px(480.0))
                     .child(
                         div()
-                            .text_color(colors.accent_foreground)
-                            .child(format!("Selected: {selected_mode_label}")),
-                    )
-                    .child(
-                        div()
+                            .id("left_sidebar")
+                            .w(px(360.0))
+                            .flex_none()
                             .flex()
                             .flex_col()
-                            .gap_1()
-                            .child(
-                                div().text_color(colors.muted_foreground).child(format!(
-                                    "Requirement: {}",
-                                    mode_requirement.description
-                                )),
-                            )
-                            .children(
-                                std::iter::once(mode_requirement_satisfied)
-                                    .filter(|ready| *ready)
-                                    .map(|_| {
-                                        div()
-                                            .text_color(colors.success_foreground)
-                                            .child("Reference requirement satisfied.")
-                                    }),
-                            )
-                            .children(
-                                mode_requirement
-                                    .unmet_message
-                                    .iter()
-                                    .filter(|_| !mode_requirement_satisfied)
-                                    .map(|message| div().text_color(colors.error_foreground).child(*message)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(mode_button(
-                                "generation-mode-melody",
-                                GenerationMode::Melody,
-                            ))
-                            .child(mode_button(
-                                "generation-mode-chord-progression",
-                                GenerationMode::ChordProgression,
-                            ))
-                            .child(mode_button(
-                                "generation-mode-drum-pattern",
-                                GenerationMode::DrumPattern,
-                            ))
-                            .child(mode_button(
-                                "generation-mode-bassline",
-                                GenerationMode::Bassline,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(mode_button(
-                                "generation-mode-counter-melody",
-                                GenerationMode::CounterMelody,
-                            ))
-                            .child(mode_button(
-                                "generation-mode-harmony",
-                                GenerationMode::Harmony,
-                            ))
-                            .child(mode_button(
-                                "generation-mode-continuation",
-                                GenerationMode::Continuation,
-                            )),
-                    ),
-            )
-            .child(Label::new("Reference Slot"))
-            .child(
-                div()
-                    .id("reference-slot-selector")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p(spacing.panel_padding)
-                    .rounded(radius.panel)
-                    .border_1()
-                    .border_color(colors.panel_border)
-                    .bg(colors.panel_background)
-                    .child(
-                        div()
-                            .text_color(colors.accent_foreground)
-                            .child(format!("Selected: {selected_reference_slot_label}")),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(slot_button(ReferenceSlot::Melody))
-                            .child(slot_button(ReferenceSlot::ChordProgression))
-                            .child(slot_button(ReferenceSlot::DrumPattern))
-                            .child(slot_button(ReferenceSlot::Bassline)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(slot_button(ReferenceSlot::CounterMelody))
-                            .child(slot_button(ReferenceSlot::Harmony))
-                            .child(slot_button(ReferenceSlot::ContinuationSeed)),
-                    ),
-            )
-            .child(Label::new("Input Tracks"))
-            .child(
-                div()
-                    .id("input-track-list")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(Self::reference_slots().iter().copied().map(|slot| {
-                        let slot_label = Self::reference_slot_label(slot);
-                        let slot_source = self.source_for_slot(slot);
-                        let slot_channel = self.channel_mapping_for_slot(slot);
-                        let slot_live_summary = self.live_recording_summary_for_slot(slot);
-                        let slot_is_selected = self.selected_reference_slot == slot;
-                        let select_button = Button::new(Self::input_track_slot_select_button_id(slot))
-                            .label(if slot_is_selected { "Selected" } else { "Select Slot" })
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                this.on_reference_slot_selected(slot, cx)
-                            }));
-	                        let select_button = if slot_is_selected {
-	                            select_button.primary()
-	                        } else {
-	                            select_button
-	                        };
-	                        let source_button =
-	                            |source: ReferenceSource, label: &'static str| {
-	                                let button = Button::new(Self::input_track_source_button_id(
-	                                    slot, source,
-	                                ))
-	                                .label(label)
-	                                .on_click(cx.listener(move |this, _, _window, cx| {
-	                                    this.on_reference_source_selected(slot, source, cx)
-	                                }));
-	                                if slot_source == source {
-	                                    button.primary()
-	                                } else {
-	                                    button
-	                                }
-	                            };
-	                        div()
-	                            .id(Self::input_track_row_id(slot))
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .p(spacing.panel_padding)
-                            .rounded(radius.panel)
-                            .border_1()
-                            .border_color(colors.selectable_panel_border(slot_is_selected))
-                            .bg(colors.selectable_panel_background(slot_is_selected))
+                            .gap(spacing.section_gap)
+                            .overflow_y_scrollbar()
                             .child(
                                 div()
+                                    .id("prompt_mode_model_panel")
                                     .flex()
-                                    .items_center()
-                                    .justify_between()
+                                    .flex_col()
                                     .gap_2()
-                                    .child(div().text_color(colors.accent_foreground).child(slot_label))
-                                    .child(select_button),
+                                    .p(spacing.panel_padding)
+                                    .rounded(radius.panel)
+                                    .border_1()
+                                    .border_color(colors.panel_border)
+                                    .bg(colors.panel_background)
+                                    .child(Label::new("Prompt / Mode / Model"))
+                                    .child(
+                                        div()
+                                            .text_color(colors.muted_foreground)
+                                            .child("Prompt drives `on_generate_clicked` with the selected mode and collected references."),
+                                    )
+                                    .child(Input::new(&self.prompt_input).h(px(PROMPT_EDITOR_HEIGHT_PX)))
+                                    .children(self.validation_error.iter().map(|message| {
+                                        div()
+                                            .text_color(colors.error_foreground)
+                                            .child(format!("Validation: {message}"))
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_color(colors.accent_foreground)
+                                            .child(format!("Selected Mode: {selected_mode_label}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(colors.muted_foreground)
+                                            .child(format!("Requirement: {}", mode_requirement.description)),
+                                    )
+                                    .children(
+                                        std::iter::once(mode_requirement_satisfied)
+                                            .filter(|ready| *ready)
+                                            .map(|_| {
+                                                div()
+                                                    .text_color(colors.success_foreground)
+                                                    .child("Reference requirement satisfied.")
+                                            }),
+                                    )
+                                    .children(
+                                        mode_requirement
+                                            .unmet_message
+                                            .iter()
+                                            .filter(|_| !mode_requirement_satisfied)
+                                            .map(|message| {
+                                                div().text_color(colors.error_foreground).child(*message)
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap_1()
+                                            .child(mode_button(
+                                                "generation-mode-melody",
+                                                GenerationMode::Melody,
+                                            ))
+                                            .child(mode_button(
+                                                "generation-mode-chord-progression",
+                                                GenerationMode::ChordProgression,
+                                            ))
+                                            .child(mode_button(
+                                                "generation-mode-drum-pattern",
+                                                GenerationMode::DrumPattern,
+                                            ))
+                                            .child(mode_button(
+                                                "generation-mode-bassline",
+                                                GenerationMode::Bassline,
+                                            ))
+                                            .child(mode_button(
+                                                "generation-mode-counter-melody",
+                                                GenerationMode::CounterMelody,
+                                            ))
+                                            .child(mode_button(
+                                                "generation-mode-harmony",
+                                                GenerationMode::Harmony,
+                                            ))
+                                            .child(mode_button(
+                                                "generation-mode-continuation",
+                                                GenerationMode::Continuation,
+                                            )),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(colors.accent_foreground)
+                                            .child(format!("AI Model: {saved_default_model}")),
+                                    )
+                                    .child(Label::new("API Key (testing)"))
+                                    .child(Input::new(&self.api_key_input).mask_toggle())
+                                    .children(self.api_key_error.iter().map(|message| {
+                                        div()
+                                            .text_color(colors.error_foreground)
+                                            .child(format!("API Key: {message}"))
+                                    })),
                             )
                             .child(
-	                                div()
-	                                    .flex()
-	                                    .items_center()
-	                                    .gap_2()
-	                                    .child(source_button(ReferenceSource::File, "File"))
-	                                    .child(source_button(ReferenceSource::Live, "Live"))
-	                                    .child(
-	                                        div()
-	                                            .text_color(colors.muted_foreground)
-                                            .child(format!("Source: {}", Self::reference_source_label(slot_source))),
-                                    ),
-                            )
-                            .child(
-                                div().text_color(colors.muted_foreground).child(format!(
-                                    "Assigned Live Channel: {}",
-                                    slot_channel
-                                        .map(|channel| channel.to_string())
-                                        .unwrap_or_else(|| "Not set".to_string())
-                                )),
-                            )
-                            .children(
-                                std::iter::once(slot_source)
-                                    .filter(|source| *source == ReferenceSource::Live)
-                                    .map(|_| {
-                                        let selected_channel = slot_channel;
-                                        let live_summary = slot_live_summary;
-                                        let live_channel_button_row = |start: u8, end: u8| {
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1()
-                                                .children((start..=end).map(|channel| {
-                                                    let disabled = live_channel_used_by_other_slots_in_mappings(
-                                                        &live_channel_mappings,
-                                                        slot,
-                                                        channel,
-                                                    );
-                                                    let button = Button::new(
-                                                        Self::input_track_channel_button_id(
-                                                            slot, channel,
-                                                        ),
-                                                    )
-                                                    .label(if disabled {
-                                                        format!("{channel}*")
-                                                    } else {
-                                                        channel.to_string()
-                                                    })
-                                                    .disabled(disabled)
-                                                    .on_click(cx.listener(
-                                                        move |this, _, _window, cx| {
-                                                            this.on_live_channel_selected(
-                                                                slot, channel, cx,
+                                div()
+                                    .id("input_tracks_panel")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .p(spacing.panel_padding)
+                                    .rounded(radius.panel)
+                                    .border_1()
+                                    .border_color(colors.panel_border)
+                                    .bg(colors.panel_background)
+                                    .child(Label::new("Input Tracks"))
+                                    .child(
+                                        div()
+                                            .text_color(colors.muted_foreground)
+                                            .child("Select a slot, configure source/channel, and register references."),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap_1()
+                                            .children(
+                                                Self::reference_slots()
+                                                    .iter()
+                                                    .copied()
+                                                    .map(slot_button),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(colors.accent_foreground)
+                                            .child(format!("Selected Slot: {selected_reference_slot_label}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(source_button(ReferenceSource::File, "File"))
+                                            .child(source_button(ReferenceSource::Live, "Live"))
+                                            .child(
+                                                div()
+                                                    .text_color(colors.muted_foreground)
+                                                    .child(format!("Source: {selected_reference_source_label}")),
+                                            ),
+                                    )
+                                    .children(
+                                        std::iter::once(selected_reference_source)
+                                            .filter(|source| *source == ReferenceSource::Live)
+                                            .map(|_| {
+                                                let live_channel_button_row = |start: u8, end: u8| {
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .children((start..=end).map(|channel| {
+                                                            let disabled = live_channel_used_by_other_slots_in_mappings(
+                                                                &live_channel_mappings,
+                                                                selected_slot,
+                                                                channel,
+                                                            );
+                                                            let button = Button::new(
+                                                                Self::input_track_channel_button_id(
+                                                                    selected_slot,
+                                                                    channel,
+                                                                ),
                                                             )
-                                                        },
-                                                    ));
-                                                    if selected_channel == Some(channel) {
-                                                        button.primary()
-                                                    } else {
-                                                        button
-                                                    }
-                                                }))
-                                        };
+                                                            .label(if disabled {
+                                                                format!("{channel}*")
+                                                            } else {
+                                                                channel.to_string()
+                                                            })
+                                                            .disabled(disabled)
+                                                            .on_click(cx.listener(
+                                                                move |this, _, _window, cx| {
+                                                                    this.on_live_channel_selected(
+                                                                        selected_slot,
+                                                                        channel,
+                                                                        cx,
+                                                                    )
+                                                                },
+                                                            ));
+                                                            if selected_live_channel == Some(channel) {
+                                                                button.primary()
+                                                            } else {
+                                                                button
+                                                            }
+                                                        }))
+                                                };
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .text_color(colors.accent_foreground)
+                                                            .child(format!(
+                                                                "Live Channel: {}",
+                                                                selected_live_channel
+                                                                    .map(|channel| channel.to_string())
+                                                                    .unwrap_or_else(|| "Not set".to_string())
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_color(colors.accent_foreground)
+                                                            .child(format!(
+                                                                "Recorded Bars: {} / Notes: {} / Events: {}",
+                                                                selected_live_recording_summary.bar_count,
+                                                                selected_live_recording_summary.note_count,
+                                                                selected_live_recording_summary.event_count
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_color(colors.muted_foreground)
+                                                            .child(format!(
+                                                                "Pitch Range: {}",
+                                                                match (
+                                                                    selected_live_recording_summary.min_pitch,
+                                                                    selected_live_recording_summary.max_pitch,
+                                                                ) {
+                                                                    (Some(min), Some(max)) => {
+                                                                        format!("{min}..{max}")
+                                                                    }
+                                                                    _ => "N/A".to_string(),
+                                                                }
+                                                            )),
+                                                    )
+                                                    .child(live_channel_button_row(1, 8))
+                                                    .child(live_channel_button_row(9, 16))
+                                                    .child(
+                                                        div()
+                                                            .text_color(colors.muted_foreground)
+                                                            .child("`*` indicates a channel already assigned to another Live slot."),
+                                                    )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("midi_slot_selected")
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .p(spacing.panel_compact_padding)
+                                            .rounded(radius.control)
+                                            .border_1()
+                                            .border_color(colors.panel_border)
+                                            .bg(colors.surface_background)
+                                            .can_drop(move |value, _, _| {
+                                                selected_slot_accepts_file_drop
+                                                    && value
+                                                        .downcast_ref::<ExternalPaths>()
+                                                        .is_some_and(|paths| !paths.paths().is_empty())
+                                            })
+                                            .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                                                if !selected_slot_accepts_file_drop {
+                                                    style
+                                                        .border_color(colors.panel_border)
+                                                        .bg(colors.surface_background)
+                                                } else if choose_dropped_midi_path(paths.paths()).is_some() {
+                                                    style
+                                                        .border_color(colors.panel_active_border)
+                                                        .bg(colors.panel_active_background)
+                                                } else {
+                                                    style
+                                                        .border_color(colors.drop_invalid_border)
+                                                        .bg(colors.drop_invalid_background)
+                                                }
+                                            })
+                                            .on_drop(cx.listener(
+                                                |this, paths: &ExternalPaths, _window, cx| {
+                                                    this.on_midi_slot_drop(paths, cx)
+                                                },
+                                            ))
+                                            .child(if selected_slot_accepts_file_drop {
+                                                div().child(format!(
+                                                    "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label}"
+                                                ))
+                                            } else {
+                                                div().child(format!(
+                                                    "{selected_reference_slot_label} is using Live input. Switch source to File to load MIDI files."
+                                                ))
+                                            })
+                                            .child(div().child(format!(
+                                                "Registered File MIDI: {selected_slot_reference_count}"
+                                            )))
+                                            .children(
+                                                std::iter::once((
+                                                    selected_slot_reference_count,
+                                                    selected_reference_source,
+                                                ))
+                                                .filter(|(count, source)| {
+                                                    *count == 0 && *source == ReferenceSource::File
+                                                })
+                                                .map(|_| {
+                                                    div().text_color(colors.muted_foreground).child(format!(
+                                                        "File: {MIDI_SLOT_EMPTY_LABEL}"
+                                                    ))
+                                                }),
+                                            )
+                                            .children(selected_slot_references.iter().enumerate().map(
+                                                |(index, reference)| {
+                                                    let slot_file_path = reference
+                                                        .file
+                                                        .as_ref()
+                                                        .map(|file| file.path.clone())
+                                                        .unwrap_or_else(|| {
+                                                            MIDI_SLOT_EMPTY_LABEL.to_string()
+                                                        });
+                                                    let slot_file_label =
+                                                        display_file_name_from_path(&slot_file_path);
+                                                    let slot_stats = format!(
+                                                        "Bars: {} / Notes: {}",
+                                                        reference.bars, reference.note_count
+                                                    );
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap_1()
+                                                        .p(spacing.panel_compact_padding)
+                                                        .rounded(radius.control)
+                                                        .border_1()
+                                                        .border_color(colors.panel_border)
+                                                        .bg(colors.panel_background)
+                                                        .child(
+                                                            div()
+                                                                .text_color(colors.accent_foreground)
+                                                                .child(format!(
+                                                                    "#{}: {slot_file_label}",
+                                                                    index + 1
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_color(colors.accent_foreground)
+                                                                .child(slot_stats),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_color(colors.muted_foreground)
+                                                                .child(slot_file_path),
+                                                        )
+                                                },
+                                            ))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("midi-slot-select-button")
+                                                            .label("Select MIDI File")
+                                                            .disabled(!selected_slot_accepts_file_drop)
+                                                            .on_click(cx.listener(
+                                                                |this, _, window, cx| {
+                                                                    this.on_select_midi_file_clicked(window, cx)
+                                                                },
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        Button::new("midi-slot-clear-button")
+                                                            .label("Clear Slot")
+                                                            .disabled(
+                                                                !selected_slot_set
+                                                                    || !selected_slot_accepts_file_drop,
+                                                            )
+                                                            .on_click(cx.listener(
+                                                                |this, _, _window, cx| {
+                                                                    this.on_clear_midi_slot_clicked(cx)
+                                                                },
+                                                            )),
+                                                    ),
+                                            ),
+                                    )
+                                    .children(self.input_track_error.iter().map(|message| {
+                                        div()
+                                            .text_color(colors.error_foreground)
+                                            .child(format!("Input Tracks: {message}"))
+                                    }))
+                                    .children(selected_slot_error.into_iter().map(|error| {
+                                        let slot_label = Self::reference_slot_label(error.slot);
+                                        let retry_slot = error.slot;
+                                        let slot_is_file_source =
+                                            self.source_for_slot(error.slot) == ReferenceSource::File;
                                         div()
                                             .flex()
                                             .flex_col()
                                             .gap_2()
                                             .child(
-                                                div().text_color(colors.accent_foreground).child(format!(
-                                                    "Recorded Bars: {} / Notes: {} / Events: {}",
-                                                    live_summary.bar_count,
-                                                    live_summary.note_count,
-                                                    live_summary.event_count
+                                                div().text_color(colors.error_foreground).child(format!(
+                                                    "Reference MIDI ({slot_label}): {}",
+                                                    error.message
                                                 )),
-                                            )
-                                            .child(
-                                                div().text_color(colors.muted_foreground).child(format!(
-                                                    "Pitch Range: {}",
-                                                    match (
-                                                        live_summary.min_pitch,
-                                                        live_summary.max_pitch,
-                                                    ) {
-                                                        (Some(min), Some(max)) =>
-                                                            format!("{min}..{max}"),
-                                                        _ => "N/A".to_string(),
-                                                    }
-                                                )),
-                                            )
-                                            .child(
-                                                div().text_color(colors.accent_foreground).child(format!(
-                                                    "Live Channel: {}",
-                                                    selected_channel
-                                                        .map(|channel| channel.to_string())
-                                                        .unwrap_or_else(|| "Not set".to_string())
-                                                )),
-                                            )
-                                            .child(
-                                                live_channel_button_row(1, 8),
-                                            )
-                                            .child(
-                                                live_channel_button_row(9, 16),
                                             )
                                             .child(
                                                 div()
-                                                    .text_color(colors.muted_foreground)
-                                                    .child("`*` means already used by another Live slot."),
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("midi-slot-retry-button")
+                                                            .label("Retry")
+                                                            .disabled(
+                                                                !error.can_retry() || !slot_is_file_source,
+                                                            )
+                                                            .on_click(cx.listener(
+                                                                move |this, _, _window, cx| {
+                                                                    this.on_retry_midi_slot_clicked(
+                                                                        retry_slot,
+                                                                        cx,
+                                                                    )
+                                                                },
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        Button::new("midi-slot-reselect-button")
+                                                            .label("Choose Another File")
+                                                            .disabled(!slot_is_file_source)
+                                                            .on_click(cx.listener(
+                                                                |this, _, window, cx| {
+                                                                    this.on_select_midi_file_clicked(window, cx)
+                                                                },
+                                                            )),
+                                                    ),
                                             )
-                                    }),
-                            )
-                    })),
-            )
-            .children(self.input_track_error.iter().map(|message| {
-                div()
-                    .text_color(colors.error_foreground)
-                    .child(format!("Input Tracks: {message}"))
-            }))
-            .child(Label::new("MIDI Channel Recording"))
-            .child(
-                div()
-                    .id("recording-channel-panel")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p(spacing.panel_padding)
-                    .rounded(radius.panel)
-                    .border_1()
-                    .border_color(colors.panel_border)
-                    .bg(colors.panel_background)
-                    .child(
-                        div()
-                            .text_color(colors.muted_foreground)
-                            .child("Toggle recording capture per MIDI Channel."),
-                    )
-                    .child({
-                        let recording_channel_button_row = |start: u8, end: u8| {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .children((start..=end).map(|channel| {
-                                    let enabled = self.recording_enabled_for_channel(channel);
-                                    let button = Button::new(Self::recording_channel_button_id(channel))
-                                        .label(if enabled {
-                                            format!("Ch {channel} ON")
-                                        } else {
-                                            format!("Ch {channel} OFF")
-                                        })
-                                        .on_click(cx.listener(move |this, _, _window, cx| {
-                                            this.on_recording_channel_toggled(channel, cx)
-                                        }));
-                                    if enabled { button.primary() } else { button }
-                                }))
-                        };
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(recording_channel_button_row(1, 8))
-                            .child(recording_channel_button_row(9, 16))
-                    }),
-            )
-            .child(Label::new("Reference Slot Overview"))
-            .child(
-                div()
-                    .id("reference-slot-overview")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(Self::reference_slots().iter().copied().map(|slot| {
-                        let slot_references: Vec<&_> = file_references
-                            .iter()
-                            .filter(|reference| reference.slot == slot)
-                            .collect();
-                        let slot_reference_count = slot_references.len();
-                        let slot_source = self.source_for_slot(slot);
-                        let slot_channel = self.channel_mapping_for_slot(slot);
-                        let slot_live_summary = self.live_recording_summary_for_slot(slot);
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .p(spacing.panel_compact_padding)
-                            .rounded(radius.control)
-                            .border_1()
-                            .border_color(colors.selectable_panel_border(
-                                slot == self.selected_reference_slot,
-                            ))
-                            .bg(colors.selectable_panel_background(
-                                slot == self.selected_reference_slot,
-                            ))
-                            .child(div().text_color(colors.accent_foreground).child(Self::reference_slot_label(slot)))
-                            .child(
-                                div()
-                                    .text_color(colors.muted_foreground)
-                                    .child(format!("Source: {}", Self::reference_source_label(slot_source))),
-                            )
-                            .children(std::iter::once(slot_source).filter_map(|source| {
-                                if source == ReferenceSource::Live {
-                                    Some(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .text_color(colors.muted_foreground)
-                                            .child(format!(
-                                                "Live Channel: {}",
-                                                slot_channel
-                                                    .map(|channel| channel.to_string())
-                                                    .unwrap_or_else(|| "Not set".to_string())
-                                            ))
-                                            .child(format!(
-                                                "Recorded Bars: {} / Notes: {} / Events: {}",
-                                                slot_live_summary.bar_count,
-                                                slot_live_summary.note_count,
-                                                slot_live_summary.event_count
-                                            ))
-                                            .child(format!(
-                                                "Pitch Range: {}",
-                                                match (
-                                                    slot_live_summary.min_pitch,
-                                                    slot_live_summary.max_pitch,
-                                                ) {
-                                                    (Some(min), Some(max)) => format!("{min}..{max}"),
-                                                    _ => "N/A".to_string(),
-                                                }
-                                            )),
-                                    )
-                                } else {
-                                    None
-                                }
-                            }))
-                            .child(div().child(format!("Registered File MIDI: {slot_reference_count}")))
-                            .children(
-                                std::iter::once((slot_reference_count, slot_source))
-                                    .filter(|(count, source)| {
-                                        *count == 0 && *source == ReferenceSource::File
-                                    })
-                                    .map(|_| div().child(format!("File: {MIDI_SLOT_EMPTY_LABEL}"))),
-                            )
-                            .children(
-                                slot_references
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(index, reference)| {
-                                        let slot_file_path = reference
-                                            .file
-                                            .as_ref()
-                                            .map(|file| file.path.clone())
-                                            .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
-                                        let slot_file_label = display_file_name_from_path(&slot_file_path);
-                                        let slot_stats = format!(
-                                            "Bars: {} / Notes: {}",
-                                            reference.bars, reference.note_count
-                                        );
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div().text_color(colors.accent_foreground).child(format!(
-                                                    "#{}: {slot_file_label}",
-                                                    index + 1
-                                                )),
-                                            )
-                                            .child(div().text_color(colors.accent_foreground).child(slot_stats))
-                                            .child(div().text_color(colors.muted_foreground).child(slot_file_path))
-                                    }),
-                            )
-                    })),
-            )
-            .child(Label::new(format!(
-                "Reference MIDI ({selected_reference_slot_label} Slot / Source: {selected_reference_source_label})"
-            )))
-            .child(
-                div()
-                    .id("midi-slot-selected")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p(spacing.panel_padding)
-                    .rounded(radius.panel)
-                    .border_1()
-                    .border_color(colors.panel_border)
-                    .bg(colors.panel_background)
-                    .can_drop(move |value, _, _| {
-                        selected_slot_accepts_file_drop
-                            && value
-                                .downcast_ref::<ExternalPaths>()
-                                .is_some_and(|paths| !paths.paths().is_empty())
-                    })
-                    .drag_over::<ExternalPaths>(move |style, paths, _, _| {
-                        if !selected_slot_accepts_file_drop {
-                            style.border_color(colors.panel_border).bg(colors.panel_background)
-                        } else if choose_dropped_midi_path(paths.paths()).is_some() {
-                            style.border_color(colors.panel_active_border).bg(colors.panel_active_background)
-                        } else {
-                            style.border_color(colors.drop_invalid_border).bg(colors.drop_invalid_background)
-                        }
-                    })
-                    .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
-                        this.on_midi_slot_drop(paths, cx)
-                    }))
-                    .child(if selected_slot_accepts_file_drop {
-                        div().child(format!(
-                            "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label} (appends to this slot)."
-                        ))
-                    } else {
-                        div().child(format!(
-                            "{selected_reference_slot_label} is using Live input. Switch source to File to load MIDI files."
-                        ))
-                    })
-                    .children(std::iter::once(selected_live_channel).filter_map(|channel| {
-                        if selected_reference_source == ReferenceSource::Live {
-                            Some(
-                                div().flex().flex_col().gap_1().child(
-                                    div().text_color(colors.accent_foreground).child(format!(
-                                        "Live Channel: {}",
-                                        channel
-                                            .map(|value| value.to_string())
-                                            .unwrap_or_else(|| "Not set".to_string())
-                                    )),
-                                )
-                                .child(
-                                    div().text_color(colors.accent_foreground).child(format!(
-                                        "Recorded Bars: {} / Notes: {} / Events: {}",
-                                        selected_live_recording_summary.bar_count,
-                                        selected_live_recording_summary.note_count,
-                                        selected_live_recording_summary.event_count
-                                    )),
-                                )
-                                .child(
-                                    div().text_color(colors.muted_foreground).child(format!(
-                                        "Pitch Range: {}",
-                                        match (
-                                            selected_live_recording_summary.min_pitch,
-                                            selected_live_recording_summary.max_pitch,
-                                        ) {
-                                            (Some(min), Some(max)) => format!("{min}..{max}"),
-                                            _ => "N/A".to_string(),
-                                        }
-                                    )),
-                                ),
-                            )
-                        } else {
-                            None
-                        }
-                    }))
-                    .child(div().child(format!(
-                        "Registered File MIDI in slot: {selected_slot_reference_count}"
-                    )))
-                    .children(
-                        std::iter::once((selected_slot_reference_count, selected_reference_source))
-                            .filter(|(count, source)| {
-                                *count == 0 && *source == ReferenceSource::File
-                            })
-                            .map(|_| div().child(format!("File: {MIDI_SLOT_EMPTY_LABEL}"))),
-                    )
-                    .children(
-                        selected_slot_references
-                            .iter()
-                            .enumerate()
-                            .map(|(index, reference)| {
-                                let slot_file_path = reference
-                                    .file
-                                    .as_ref()
-                                    .map(|file| file.path.clone())
-                                    .unwrap_or_else(|| MIDI_SLOT_EMPTY_LABEL.to_string());
-                                let slot_file_label = display_file_name_from_path(&slot_file_path);
-                                let slot_stats =
-                                    format!("Bars: {} / Notes: {}", reference.bars, reference.note_count);
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .p(spacing.panel_compact_padding)
-                                    .rounded(radius.control)
-                                    .border_1()
-                                    .border_color(colors.panel_border)
-                                    .bg(colors.surface_background)
+                                    }))
                                     .child(
                                         div()
-                                            .text_color(colors.accent_foreground)
-                                            .child(format!("#{}: {slot_file_label}", index + 1)),
+                                            .id("recording-channel-panel")
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .p(spacing.panel_compact_padding)
+                                            .rounded(radius.control)
+                                            .border_1()
+                                            .border_color(colors.panel_border)
+                                            .bg(colors.surface_background)
+                                            .child(
+                                                div()
+                                                    .text_color(colors.muted_foreground)
+                                                    .child("Recording enable state per MIDI channel."),
+                                            )
+                                            .child({
+                                                let recording_channel_button_row =
+                                                    |start: u8, end: u8| {
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1()
+                                                            .children((start..=end).map(|channel| {
+                                                                let enabled =
+                                                                    self.recording_enabled_for_channel(channel);
+                                                                let button = Button::new(
+                                                                    Self::recording_channel_button_id(
+                                                                        channel,
+                                                                    ),
+                                                                )
+                                                                .label(if enabled {
+                                                                    format!("Ch {channel} ON")
+                                                                } else {
+                                                                    format!("Ch {channel} OFF")
+                                                                })
+                                                                .on_click(cx.listener(
+                                                                    move |this, _, _window, cx| {
+                                                                        this.on_recording_channel_toggled(
+                                                                            channel, cx,
+                                                                        )
+                                                                    },
+                                                                ));
+                                                                if enabled {
+                                                                    button.primary()
+                                                                } else {
+                                                                    button
+                                                                }
+                                                            }))
+                                                    };
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_1()
+                                                    .child(recording_channel_button_row(1, 8))
+                                                    .child(recording_channel_button_row(9, 16))
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("generated_patterns_panel")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .p(spacing.panel_padding)
+                                    .rounded(radius.panel)
+                                    .border_1()
+                                    .border_color(colors.panel_border)
+                                    .bg(colors.panel_background)
+                                    .child(Label::new("Generated Patterns"))
+                                    .child(
+                                        div()
+                                            .text_color(colors.warning_foreground)
+                                            .child("Placeholder: candidate list / drag-to-DAW will be added in follow-up issues."),
                                     )
-                                    .child(div().text_color(colors.accent_foreground).child(slot_stats))
-                                    .child(div().text_color(colors.muted_foreground).child(slot_file_path))
-                            }),
+                                    .child(
+                                        Button::new("generated-pattern-active")
+                                            .label("Pattern 1 (placeholder)")
+                                            .disabled(true),
+                                    )
+                                    .child(
+                                        Button::new("generated-pattern-variation-a")
+                                            .label("Pattern 2 (placeholder)")
+                                            .disabled(true),
+                                    )
+                                    .child(
+                                        Button::new("generated-pattern-variation-b")
+                                            .label("Pattern 3 (placeholder)")
+                                            .disabled(true),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(colors.muted_foreground)
+                                            .child("Unimplemented actions are intentionally disabled."),
+                                    ),
+                            ),
                     )
                     .child(
                         div()
+                            .id("right_main")
+                            .flex_1()
                             .flex()
-                            .items_center()
-                            .gap_2()
+                            .flex_col()
+                            .gap(spacing.section_gap)
+                            .overflow_hidden()
                             .child(
-                                Button::new("midi-slot-select-button")
-                                    .label("Select MIDI File")
-                                    .disabled(!selected_slot_accepts_file_drop)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.on_select_midi_file_clicked(window, cx)
-                                    })),
+                                div()
+                                    .id("params_panel")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .p(spacing.panel_padding)
+                                    .rounded(radius.panel)
+                                    .border_1()
+                                    .border_color(colors.panel_border)
+                                    .bg(colors.panel_background)
+                                    .child(Label::new("Params"))
+                                    .child(
+                                        div()
+                                            .text_color(colors.warning_foreground)
+                                            .child("Placeholder: Key / Scale / BPM / Complexity / Note Density are not editable yet."),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(Button::new("param-key").label("Key: D#").disabled(true))
+                                            .child(
+                                                Button::new("param-scale")
+                                                    .label("Scale: Minor (Aeolian)")
+                                                    .disabled(true),
+                                            )
+                                            .child(Button::new("param-bpm").label("BPM: 128").disabled(true)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("param-complexity")
+                                                    .label("Complexity: 75%")
+                                                    .disabled(true),
+                                            )
+                                            .child(
+                                                Button::new("param-note-density")
+                                                    .label("Note Density: 40%")
+                                                    .disabled(true),
+                                            ),
+                                    ),
                             )
                             .child(
-                                Button::new("midi-slot-clear-button")
-                                    .label("Clear Slot")
-                                    .disabled(!selected_slot_set || !selected_slot_accepts_file_drop)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.on_clear_midi_slot_clicked(cx)
-                                    })),
+                                div()
+                                    .id("piano_roll_panel")
+                                    .flex_1()
+                                    .min_h(px(260.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .p(spacing.panel_padding)
+                                    .rounded(radius.panel)
+                                    .border_1()
+                                    .border_color(colors.panel_border)
+                                    .bg(colors.panel_background)
+                                    .child(Label::new("Piano Roll"))
+                                    .child(
+                                        div()
+                                            .text_color(colors.warning_foreground)
+                                            .child("Placeholder: generated MIDI preview and playhead overlay will be implemented in follow-up issues."),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .rounded(radius.control)
+                                            .border_1()
+                                            .border_color(colors.panel_border)
+                                            .bg(colors.surface_background)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(colors.muted_foreground)
+                                            .child("Piano Roll Placeholder"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("main_footer")
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(spacing.section_gap)
+                                    .p(spacing.panel_padding)
+                                    .rounded(radius.panel)
+                                    .border_1()
+                                    .border_color(colors.panel_border)
+                                    .bg(colors.panel_background)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(div().text_color(status_color).child(status_label))
+                                            .children(self.startup_notice.iter().map(|notice| {
+                                                div()
+                                                    .text_color(colors.muted_foreground)
+                                                    .child(format!("Backend: {notice}"))
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("apply-to-daw-button")
+                                                    .label("Apply to DAW")
+                                                    .disabled(true),
+                                            )
+                                            .child(
+                                                Button::new("generate-button")
+                                                    .primary()
+                                                    .label(if generating {
+                                                        "Generating..."
+                                                    } else {
+                                                        "Generate"
+                                                    })
+                                                    .loading(generating)
+                                                    .disabled(generating || !mode_requirement_satisfied)
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.on_generate_clicked(window, cx)
+                                                    })),
+                                            ),
+                                    ),
                             ),
                     ),
             )
-            .children(selected_slot_error.into_iter().map(|error| {
-                let slot_label = Self::reference_slot_label(error.slot);
-                let retry_slot = error.slot;
-                let slot_is_file_source = self.source_for_slot(error.slot) == ReferenceSource::File;
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_color(colors.error_foreground)
-                            .child(format!("Reference MIDI ({slot_label}): {}", error.message)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Button::new("midi-slot-retry-button")
-                                    .label("Retry")
-                                    .disabled(!error.can_retry() || !slot_is_file_source)
-                                    .on_click(cx.listener(move |this, _, _window, cx| {
-                                        this.on_retry_midi_slot_clicked(retry_slot, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("midi-slot-reselect-button")
-                                    .label("Choose Another File")
-                                    .disabled(!slot_is_file_source)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.on_select_midi_file_clicked(window, cx)
-                                    })),
-                            ),
-                    )
-            }))
-            .child(Label::new("Prompt"))
-            .child(Input::new(&self.prompt_input).h(px(PROMPT_EDITOR_HEIGHT_PX)))
-            .children(self.validation_error.iter().map(|message| {
-                div()
-                    .text_color(colors.error_foreground)
-                    .child(format!("Validation: {message}"))
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(spacing.section_gap)
-                    .child(
-                        Button::new("generate-button")
-                            .primary()
-                            .label(if generating {
-                                "Generating..."
-                            } else {
-                                "Generate"
-                            })
-                            .loading(generating)
-                            .disabled(generating || !mode_requirement_satisfied)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_generate_clicked(window, cx)
-                            })),
-                    )
-                    .child(div().text_color(status_color).child(status_label)),
-            )
-            .children(self.startup_notice.iter().map(|notice| {
-                div()
-                    .text_color(colors.accent_foreground)
-                    .child(format!("Backend: {notice}"))
-            }))
     }
 }
 
