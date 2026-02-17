@@ -84,6 +84,7 @@ pub(super) struct SonantMainWindow {
     piano_roll_hidden_rows: std::collections::HashSet<usize>,
     add_track_menu_open: bool,
     channel_menu_open: Option<usize>, // row_index of the row whose channel menu is open
+    slot_type_menu_open: Option<usize>, // row_index of the row whose slot-type menu is open
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     input_track_error: Option<String>,
@@ -201,6 +202,7 @@ impl SonantMainWindow {
             piano_roll_hidden_rows: std::collections::HashSet::new(),
             add_track_menu_open: false,
             channel_menu_open: None,
+            slot_type_menu_open: None,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             input_track_error: live_input_error,
@@ -779,6 +781,28 @@ impl SonantMainWindow {
         } else {
             Some(row_index)
         };
+        cx.notify();
+    }
+
+    fn on_slot_type_menu_toggled(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        self.slot_type_menu_open = if self.slot_type_menu_open == Some(row_index) {
+            None
+        } else {
+            Some(row_index)
+        };
+        cx.notify();
+    }
+
+    fn on_slot_type_selected(
+        &mut self,
+        row_index: usize,
+        new_slot: ReferenceSlot,
+        cx: &mut Context<Self>,
+    ) {
+        if row_index < self.visible_slot_rows.len() {
+            self.visible_slot_rows[row_index] = new_slot;
+        }
+        self.slot_type_menu_open = None;
         cx.notify();
     }
 
@@ -1771,6 +1795,7 @@ impl Render for SonantMainWindow {
                                 let visible_slot_rows = self.visible_slot_rows.clone();
                                 let add_menu_open = self.add_track_menu_open;
                                 let channel_menu_open = self.channel_menu_open;
+                                let slot_type_menu_open = self.slot_type_menu_open;
                                 let has_visible = !visible_slot_rows.is_empty();
 
                                 div()
@@ -2056,9 +2081,10 @@ impl Render for SonantMainWindow {
                                                                         }))
                                                                         .child(source_label),
                                                                 )
-                                                                // Type badge (non-interactive display)
+                                                                // Type badge (clickable → slot type menu)
                                                                 .child(
                                                                     div()
+                                                                        .id(("slot-type-badge", row_index))
                                                                         .flex_none()
                                                                         .px(px(6.0))
                                                                         .py(px(2.0))
@@ -2068,6 +2094,11 @@ impl Render for SonantMainWindow {
                                                                         .font_weight(gpui::FontWeight::BOLD)
                                                                         .border_1()
                                                                         .border_color(row_slot_color)
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.bg(colors.input_background))
+                                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                            this.on_slot_type_menu_toggled(row_index, cx);
+                                                                        }))
                                                                         .child(short_label),
                                                                 ),
                                                         )
@@ -2253,6 +2284,76 @@ impl Render for SonantMainWindow {
                                                                 .text_color(if is_selected { colors.surface_foreground } else { colors.muted_foreground })
                                                                 .font_weight(if is_selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                                                                 .child(format!("Channel {ch}")),
+                                                        )
+                                                        .when(is_selected, |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .text_size(px(10.0))
+                                                                    .text_color(colors.primary)
+                                                                    .child("✓"),
+                                                            )
+                                                        })
+                                                })),
+                                        )
+                                    })
+                                    // Slot type selection menu (shown when a type badge is clicked)
+                                    .when(slot_type_menu_open.is_some(), |el| {
+                                        let open_row = slot_type_menu_open.unwrap_or(0);
+                                        let current_slot = visible_slot_rows.get(open_row).copied().unwrap_or(ReferenceSlot::Melody);
+                                        el.child(
+                                            div()
+                                                .id("slot-type-select-menu")
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_active_border)
+                                                .bg(colors.panel_background)
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .px_3()
+                                                        .py(px(6.0))
+                                                        .border_b_1()
+                                                        .border_color(colors.panel_border)
+                                                        .text_size(px(10.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                        .child("SELECT REFERENCE TYPE"),
+                                                )
+                                                .children(Self::reference_slots().iter().copied().map(|slot_opt| {
+                                                    let is_selected = slot_opt == current_slot;
+                                                    let slot_color = colors.slot_color(slot_opt);
+                                                    div()
+                                                        .id(("slot-type-option", slot_opt as usize))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .h(px(28.0))
+                                                        .px_3()
+                                                        .bg(if is_selected { colors.panel_active_background } else { colors.panel_background })
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(colors.panel_active_background))
+                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                            this.on_slot_type_selected(open_row, slot_opt, cx);
+                                                        }))
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_2()
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(4.0))
+                                                                        .h(px(14.0))
+                                                                        .rounded(px(2.0))
+                                                                        .bg(slot_color),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(if is_selected { colors.surface_foreground } else { colors.muted_foreground })
+                                                                        .font_weight(if is_selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                                                        .child(Self::reference_slot_label(slot_opt)),
+                                                                ),
                                                         )
                                                         .when(is_selected, |el| {
                                                             el.child(
