@@ -1820,6 +1820,66 @@ impl Render for SonantMainWindow {
                                                 })),
                                         )
                                     })
+                                    // Empty state drop zone (no tracks added yet)
+                                    .when(!has_visible && !add_menu_open, |el| {
+                                        el.child(
+                                            div()
+                                                .id("input-tracks-empty")
+                                                .w_full()
+                                                .py(px(24.0))
+                                                .flex()
+                                                .flex_col()
+                                                .items_center()
+                                                .justify_center()
+                                                .gap_2()
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_border)
+                                                .bg(colors.input_background)
+                                                .can_drop(move |value, _, _| {
+                                                    value
+                                                        .downcast_ref::<ExternalPaths>()
+                                                        .is_some_and(|paths| !paths.paths().is_empty())
+                                                })
+                                                .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                                                    if choose_dropped_midi_path(paths.paths()).is_some() {
+                                                        style
+                                                            .border_color(colors.panel_active_border)
+                                                            .bg(colors.panel_active_background)
+                                                    } else {
+                                                        style
+                                                            .border_color(colors.drop_invalid_border)
+                                                            .bg(colors.drop_invalid_background)
+                                                    }
+                                                })
+                                                .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                                                    // Drop onto empty zone: add first available slot and load file
+                                                    if let Some(first_slot) = this.available_slots_to_add().into_iter().next() {
+                                                        this.on_add_track_slot_selected(first_slot, cx);
+                                                        this.on_midi_slot_drop(first_slot, paths, cx);
+                                                    }
+                                                }))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(20.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .child("♪"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.0))
+                                                        .text_color(colors.surface_foreground)
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .child("Drop MIDI file or click + Add"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .child("Add reference tracks to guide generation"),
+                                                ),
+                                        )
+                                    })
                                     // Track list (only visible slots)
                                     .when(has_visible, |el| {
                                         el.child(
