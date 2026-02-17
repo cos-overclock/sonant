@@ -21,8 +21,8 @@ use sonant::{
         MIDI_CHANNEL_MIN, MidiInputRouter,
     },
     domain::{
-        GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary, ModelRef,
-        ReferenceSlot, ReferenceSource, calculate_reference_density_hint,
+        GenerationCandidate, GenerationMode, LlmError, MidiReferenceEvent, MidiReferenceSummary,
+        ModelRef, ReferenceSlot, ReferenceSource, calculate_reference_density_hint,
         has_supported_midi_extension,
     },
 };
@@ -86,6 +86,9 @@ pub(super) struct SonantMainWindow {
     channel_menu_open: Option<usize>, // row_index of the row whose channel menu is open
     slot_type_menu_open: Option<usize>, // row_index of the row whose slot-type menu is open
     generation_status: HelperGenerationStatus,
+    generation_candidates: Vec<GenerationCandidate>,
+    selected_candidate_index: Option<usize>,
+    hidden_candidates: std::collections::HashSet<usize>,
     validation_error: Option<String>,
     input_track_error: Option<String>,
     midi_slot_errors: Vec<MidiSlotErrorState>,
@@ -204,6 +207,9 @@ impl SonantMainWindow {
             channel_menu_open: None,
             slot_type_menu_open: None,
             generation_status: HelperGenerationStatus::Idle,
+            generation_candidates: Vec::new(),
+            selected_candidate_index: None,
+            hidden_candidates: std::collections::HashSet::new(),
             validation_error: None,
             input_track_error: live_input_error,
             midi_slot_errors: Vec::new(),
@@ -687,6 +693,40 @@ impl SonantMainWindow {
         cx.notify();
     }
 
+    fn on_candidate_selected(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.generation_candidates.len() {
+            self.selected_candidate_index = Some(index);
+            cx.notify();
+        }
+    }
+
+    fn on_candidate_visibility_toggled(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.hidden_candidates.contains(&index) {
+            self.hidden_candidates.remove(&index);
+        } else {
+            self.hidden_candidates.insert(index);
+        }
+        cx.notify();
+    }
+
+    fn candidate_display_name(index: usize) -> String {
+        match index {
+            0 => "Pattern 1".to_string(),
+            1 => "Variation A".to_string(),
+            2 => "Variation B".to_string(),
+            n => format!("Pattern {}", n + 1),
+        }
+    }
+
+    fn candidate_status_label(index: usize) -> &'static str {
+        match index {
+            0 => "Active",
+            1 => "Var A",
+            2 => "Var B",
+            _ => "",
+        }
+    }
+
     fn on_slot_source_toggled(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
         let current = self.source_for_slot(slot);
         let next = match current {
@@ -1140,11 +1180,14 @@ impl SonantMainWindow {
                 request_id: update.request_id,
             },
             GenerationJobState::Succeeded => {
-                let candidate_count = update
+                let candidates = update
                     .result
-                    .as_ref()
-                    .map(|result| result.candidates.len())
-                    .unwrap_or(0);
+                    .map(|result| result.candidates)
+                    .unwrap_or_default();
+                let candidate_count = candidates.len();
+                self.generation_candidates = candidates;
+                self.selected_candidate_index = if candidate_count > 0 { Some(0) } else { None };
+                self.hidden_candidates.clear();
                 HelperGenerationStatus::Succeeded {
                     request_id: update.request_id,
                     candidate_count,
@@ -2350,7 +2393,8 @@ impl Render for SonantMainWindow {
                                     }))
                             }
                             )
-                            .child(
+                            .child({
+                                let has_candidates = !self.generation_candidates.is_empty();
                                 div()
                                     .id("generated-patterns-section")
                                     .flex()
@@ -2360,22 +2404,208 @@ impl Render for SonantMainWindow {
                                     .border_t_1()
                                     .border_color(colors.panel_border)
                                     .child(Self::section_label("Generated Patterns", colors))
-                                    .child(
-                                        Button::new("generated-pattern-active")
-                                            .label("Pattern 1 (placeholder)")
-                                            .disabled(true),
-                                    )
-                                    .child(
-                                        Button::new("generated-pattern-variation-a")
-                                            .label("Pattern 2 (placeholder)")
-                                            .disabled(true),
-                                    )
-                                    .child(
-                                        Button::new("generated-pattern-variation-b")
-                                            .label("Pattern 3 (placeholder)")
-                                            .disabled(true),
-                                    ),
-                            )
+                                    .when(!has_candidates, |el| {
+                                        el.child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .h(px(64.0))
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_border)
+                                                .bg(colors.input_background)
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .child("No patterns generated yet"),
+                                                ),
+                                        )
+                                    })
+                                    .when(has_candidates, |el| {
+                                        el.child(
+                                            div()
+                                                .id("candidate-list")
+                                                .h(px(128.0))
+                                                .overflow_y_scrollbar()
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_border)
+                                                .bg(colors.input_background)
+                                                .children(
+                                                    self.generation_candidates
+                                                        .iter()
+                                                        .enumerate()
+                                                        .map(|(index, _candidate)| {
+                                                            let is_selected =
+                                                                self.selected_candidate_index == Some(index);
+                                                            let is_visible =
+                                                                !self.hidden_candidates.contains(&index);
+                                                            let display_name =
+                                                                Self::candidate_display_name(index);
+                                                            let status_label =
+                                                                Self::candidate_status_label(index);
+
+                                                            div()
+                                                                .id(("candidate-row", index))
+                                                                .flex()
+                                                                .items_center()
+                                                                .h(px(32.0))
+                                                                .bg(if is_selected {
+                                                                    colors.success_foreground.opacity(0.08)
+                                                                } else {
+                                                                    colors.panel_background
+                                                                })
+                                                                .hover(|s| s.bg(colors.input_background))
+                                                                .cursor_pointer()
+                                                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                    this.on_candidate_selected(index, cx);
+                                                                }))
+                                                                // Green left border (active only)
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(3.0))
+                                                                        .h_full()
+                                                                        .flex_none()
+                                                                        .bg(if is_selected {
+                                                                            colors.success_foreground
+                                                                        } else {
+                                                                            gpui::transparent_black()
+                                                                        }),
+                                                                )
+                                                                // Drag handle
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(18.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .flex_none()
+                                                                        .text_size(px(12.0))
+                                                                        .text_color(colors.muted_foreground)
+                                                                        .child("⠿"),
+                                                                )
+                                                                // Radio indicator
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(16.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .flex_none()
+                                                                        .text_size(px(12.0))
+                                                                        .text_color(if is_selected {
+                                                                            colors.success_foreground
+                                                                        } else {
+                                                                            colors.muted_foreground
+                                                                        })
+                                                                        .child(if is_selected { "◉" } else { "◌" }),
+                                                                )
+                                                                // Pattern name + status label
+                                                                .child(
+                                                                    div()
+                                                                        .flex_1()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap_2()
+                                                                        .min_w(px(0.0))
+                                                                        .child(
+                                                                            div()
+                                                                                .text_size(px(11.0))
+                                                                                .text_color(if is_selected {
+                                                                                    colors.surface_foreground
+                                                                                } else {
+                                                                                    colors.muted_foreground
+                                                                                })
+                                                                                .font_weight(if is_selected {
+                                                                                    gpui::FontWeight::BOLD
+                                                                                } else {
+                                                                                    gpui::FontWeight::NORMAL
+                                                                                })
+                                                                                .overflow_hidden()
+                                                                                .child(display_name),
+                                                                        )
+                                                                        .when(!status_label.is_empty(), |el| {
+                                                                            el.child(
+                                                                                div()
+                                                                                    .flex_none()
+                                                                                    .px(px(4.0))
+                                                                                    .py(px(1.0))
+                                                                                    .rounded(px(3.0))
+                                                                                    .text_size(px(9.0))
+                                                                                    .text_color(if is_selected {
+                                                                                        colors.success_foreground
+                                                                                    } else {
+                                                                                        colors.muted_foreground
+                                                                                    })
+                                                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                                                    .border_1()
+                                                                                    .border_color(if is_selected {
+                                                                                        colors.success_foreground
+                                                                                    } else {
+                                                                                        colors.panel_border
+                                                                                    })
+                                                                                    .child(status_label),
+                                                                            )
+                                                                        }),
+                                                                )
+                                                                // Action buttons
+                                                                .child(
+                                                                    div()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap_1()
+                                                                        .pr_2()
+                                                                        .pl_2()
+                                                                        .h(px(24.0))
+                                                                        .border_l_1()
+                                                                        .border_color(colors.panel_border)
+                                                                        // Visibility toggle
+                                                                        .child(
+                                                                            div()
+                                                                                .id(("candidate-visible", index))
+                                                                                .w(px(20.0))
+                                                                                .h(px(20.0))
+                                                                                .flex()
+                                                                                .items_center()
+                                                                                .justify_center()
+                                                                                .rounded(px(999.0))
+                                                                                .text_size(px(11.0))
+                                                                                .text_color(if is_visible {
+                                                                                    colors.surface_foreground
+                                                                                } else {
+                                                                                    colors.panel_border
+                                                                                })
+                                                                                .cursor_pointer()
+                                                                                .hover(|s| s.text_color(colors.surface_foreground))
+                                                                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                                    this.on_candidate_visibility_toggled(index, cx);
+                                                                                }))
+                                                                                .child(if is_visible { "◉" } else { "◌" }),
+                                                                        )
+                                                                        // More button
+                                                                        .child(
+                                                                            div()
+                                                                                .id(("candidate-more", index))
+                                                                                .w(px(20.0))
+                                                                                .h(px(20.0))
+                                                                                .flex()
+                                                                                .items_center()
+                                                                                .justify_center()
+                                                                                .rounded(px(999.0))
+                                                                                .text_size(px(14.0))
+                                                                                .text_color(colors.muted_foreground)
+                                                                                .cursor_pointer()
+                                                                                .hover(|s| s.text_color(colors.surface_foreground))
+                                                                                .child("⋮"),
+                                                                        ),
+                                                                )
+                                                        }),
+                                                ),
+                                        )
+                                    })
+                            })
                             .child(
                                 div()
                                     .id("parameter-sliders-section")
