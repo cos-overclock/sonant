@@ -56,10 +56,6 @@ pub(super) struct SonantMainWindow {
     _prompt_input_subscription: Subscription,
     generation_mode_dropdown: Entity<DropdownState>,
     _generation_mode_dropdown_subscription: Subscription,
-    reference_slot_dropdown: Entity<DropdownState>,
-    _reference_slot_dropdown_subscription: Subscription,
-    reference_source_dropdown: Entity<DropdownState>,
-    _reference_source_dropdown_subscription: Subscription,
     ai_model_dropdown: Entity<DropdownState>,
     _ai_model_dropdown_subscription: Subscription,
     settings_anthropic_api_key_input: Entity<InputState>,
@@ -84,7 +80,11 @@ pub(super) struct SonantMainWindow {
     live_capture_transport_playing: bool,
     live_capture_playhead_ppq: f64,
     selected_generation_mode: GenerationMode,
-    selected_reference_slot: ReferenceSlot,
+    visible_slot_rows: Vec<ReferenceSlot>,
+    piano_roll_hidden_rows: std::collections::HashSet<usize>,
+    add_track_menu_open: bool,
+    channel_menu_open: Option<usize>, // row_index of the row whose channel menu is open
+    slot_type_menu_open: Option<usize>, // row_index of the row whose slot-type menu is open
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
     input_track_error: Option<String>,
@@ -111,20 +111,6 @@ impl SonantMainWindow {
             &generation_mode_dropdown,
             window,
             Self::on_generation_mode_dropdown_event,
-        );
-        let reference_slot_dropdown =
-            cx.new(|cx| SelectState::new(Self::reference_slot_dropdown_items(), None, window, cx));
-        let reference_slot_dropdown_subscription = cx.subscribe_in(
-            &reference_slot_dropdown,
-            window,
-            Self::on_reference_slot_dropdown_event,
-        );
-        let reference_source_dropdown = cx
-            .new(|cx| SelectState::new(Self::reference_source_dropdown_items(), None, window, cx));
-        let reference_source_dropdown_subscription = cx.subscribe_in(
-            &reference_source_dropdown,
-            window,
-            Self::on_reference_source_dropdown_event,
         );
         let ai_model_dropdown =
             cx.new(|cx| SelectState::new(Self::ai_model_dropdown_items(), None, window, cx));
@@ -188,10 +174,6 @@ impl SonantMainWindow {
             _prompt_input_subscription: prompt_input_subscription,
             generation_mode_dropdown,
             _generation_mode_dropdown_subscription: generation_mode_dropdown_subscription,
-            reference_slot_dropdown,
-            _reference_slot_dropdown_subscription: reference_slot_dropdown_subscription,
-            reference_source_dropdown,
-            _reference_source_dropdown_subscription: reference_source_dropdown_subscription,
             ai_model_dropdown,
             _ai_model_dropdown_subscription: ai_model_dropdown_subscription,
             settings_anthropic_api_key_input,
@@ -216,7 +198,11 @@ impl SonantMainWindow {
             live_capture_transport_playing: false,
             live_capture_playhead_ppq: 0.0,
             selected_generation_mode: GenerationMode::Melody,
-            selected_reference_slot: ReferenceSlot::Melody,
+            visible_slot_rows: vec![],
+            piano_roll_hidden_rows: std::collections::HashSet::new(),
+            add_track_menu_open: false,
+            channel_menu_open: None,
+            slot_type_menu_open: None,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
             input_track_error: live_input_error,
@@ -274,21 +260,6 @@ impl SonantMainWindow {
         ]
     }
 
-    fn reference_slot_dropdown_items() -> Vec<&'static str> {
-        Self::reference_slots()
-            .iter()
-            .copied()
-            .map(Self::reference_slot_label)
-            .collect()
-    }
-
-    fn reference_source_dropdown_items() -> Vec<&'static str> {
-        vec![
-            Self::reference_source_label(ReferenceSource::File),
-            Self::reference_source_label(ReferenceSource::Live),
-        ]
-    }
-
     fn generation_mode_from_label(label: &str) -> Option<GenerationMode> {
         // Derive the reverse mapping from the single-sourced label helper
         let all_modes = [
@@ -307,49 +278,10 @@ impl SonantMainWindow {
             .find(|mode| Self::generation_mode_label(*mode) == label)
     }
 
-    fn reference_slot_from_label(label: &str) -> Option<ReferenceSlot> {
-        // Derive the reverse mapping from the single-sourced label helper
-        let all_slots = [
-            ReferenceSlot::Melody,
-            ReferenceSlot::ChordProgression,
-            ReferenceSlot::DrumPattern,
-            ReferenceSlot::Bassline,
-            ReferenceSlot::CounterMelody,
-            ReferenceSlot::Harmony,
-            ReferenceSlot::ContinuationSeed,
-        ];
-
-        all_slots
-            .iter()
-            .copied()
-            .find(|slot| Self::reference_slot_label(*slot) == label)
-    }
-
-    fn reference_source_from_label(label: &str) -> Option<ReferenceSource> {
-        // Derive the reverse mapping from the single-sourced label helper
-        let all_sources = [ReferenceSource::File, ReferenceSource::Live];
-
-        all_sources
-            .iter()
-            .copied()
-            .find(|source| Self::reference_source_label(*source) == label)
-    }
-
     fn sync_dropdowns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mode_label = Self::generation_mode_label(self.selected_generation_mode);
         self.generation_mode_dropdown.update(cx, |state, cx| {
             state.set_selected_value(&mode_label, window, cx);
-        });
-
-        let slot_label = Self::reference_slot_label(self.selected_reference_slot);
-        self.reference_slot_dropdown.update(cx, |state, cx| {
-            state.set_selected_value(&slot_label, window, cx);
-        });
-
-        let source_label =
-            Self::reference_source_label(self.source_for_slot(self.selected_reference_slot));
-        self.reference_source_dropdown.update(cx, |state, cx| {
-            state.set_selected_value(&source_label, window, cx);
         });
 
         let model_id = self.settings_ui_state.saved().default_model.as_str();
@@ -378,44 +310,6 @@ impl SonantMainWindow {
             return;
         };
         self.on_generation_mode_selected(mode, cx);
-    }
-
-    fn on_reference_slot_dropdown_event(
-        &mut self,
-        _state: &Entity<DropdownState>,
-        event: &SelectEvent<Vec<&'static str>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let SelectEvent::Confirm(selected_label) = event;
-        let Some(selected_label) = selected_label.as_deref() else {
-            return;
-        };
-        let Some(slot) = Self::reference_slot_from_label(selected_label) else {
-            return;
-        };
-
-        self.on_reference_slot_selected(slot, cx);
-        self.sync_dropdowns(window, cx);
-    }
-
-    fn on_reference_source_dropdown_event(
-        &mut self,
-        _state: &Entity<DropdownState>,
-        event: &SelectEvent<Vec<&'static str>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let SelectEvent::Confirm(selected_label) = event;
-        let Some(selected_label) = selected_label.as_deref() else {
-            return;
-        };
-        let Some(source) = Self::reference_source_from_label(selected_label) else {
-            return;
-        };
-
-        self.on_reference_source_selected(self.selected_reference_slot, source, cx);
-        self.sync_dropdowns(window, cx);
     }
 
     fn on_ai_model_dropdown_event(
@@ -602,7 +496,8 @@ impl SonantMainWindow {
                 message: error.user_message(),
             };
             self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
-                self.selected_reference_slot,
+                ReferenceSlot::Melody,
+                0,
                 error.user_message(),
             ));
             cx.notify();
@@ -698,13 +593,6 @@ impl SonantMainWindow {
         }
     }
 
-    fn reference_source_label(source: ReferenceSource) -> &'static str {
-        match source {
-            ReferenceSource::File => "File",
-            ReferenceSource::Live => "Live",
-        }
-    }
-
     fn reference_slot_index(slot: ReferenceSlot) -> usize {
         match slot {
             ReferenceSlot::Melody => 0,
@@ -717,15 +605,95 @@ impl SonantMainWindow {
         }
     }
 
-    fn input_track_channel_button_id(slot: ReferenceSlot, channel: u8) -> (&'static str, usize) {
-        (
-            "input-track-channel",
-            Self::reference_slot_index(slot) * 100 + usize::from(channel),
-        )
+    fn slot_short_label(slot: ReferenceSlot) -> &'static str {
+        match slot {
+            ReferenceSlot::Melody => "Melody",
+            ReferenceSlot::ChordProgression => "Chords",
+            ReferenceSlot::DrumPattern => "Drums",
+            ReferenceSlot::Bassline => "Bass",
+            ReferenceSlot::CounterMelody => "Counter",
+            ReferenceSlot::Harmony => "Harmony",
+            ReferenceSlot::ContinuationSeed => "Seed",
+        }
     }
 
-    fn recording_channel_button_id(channel: u8) -> (&'static str, usize) {
-        ("recording-channel", usize::from(channel))
+    fn slot_source_display_label(&self, slot: ReferenceSlot) -> String {
+        match self.source_for_slot(slot) {
+            ReferenceSource::Live => {
+                let ch = self.channel_mapping_for_slot(slot).unwrap_or(1);
+                format!("Live: CH {ch}")
+            }
+            ReferenceSource::File => {
+                let file_references = self.load_midi_use_case.snapshot_references();
+                let has_file = file_references.iter().any(|r| r.slot == slot);
+                if has_file {
+                    file_references
+                        .iter()
+                        .find(|r| r.slot == slot)
+                        .and_then(|r| r.file.as_ref())
+                        .map(|f| display_file_name_from_path(&f.path))
+                        .unwrap_or_else(|| "File".to_string())
+                } else {
+                    "Drop MIDI file".to_string()
+                }
+            }
+        }
+    }
+
+    fn on_add_track_clicked(&mut self, cx: &mut Context<Self>) {
+        self.add_track_menu_open = !self.add_track_menu_open;
+        cx.notify();
+    }
+
+    fn on_add_track_slot_selected(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
+        self.visible_slot_rows.push(slot);
+        self.add_track_menu_open = false;
+        cx.notify();
+    }
+
+    fn on_remove_track_row(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        if row_index < self.visible_slot_rows.len() {
+            let slot = self.visible_slot_rows[row_index];
+            self.visible_slot_rows.remove(row_index);
+            self.clear_midi_slot_error_for_row(slot, row_index);
+            // adjust row_index in remaining errors for rows that shifted down
+            for error in &mut self.midi_slot_errors {
+                if error.slot == slot && error.row_index > row_index {
+                    error.row_index -= 1;
+                }
+            }
+            // adjust piano_roll_hidden_rows: remove deleted row, shift down higher indices
+            self.piano_roll_hidden_rows.remove(&row_index);
+            let shifted: std::collections::HashSet<usize> = self
+                .piano_roll_hidden_rows
+                .drain()
+                .map(|i| if i > row_index { i - 1 } else { i })
+                .collect();
+            self.piano_roll_hidden_rows = shifted;
+            // if no more rows for this slot, clear the underlying file references
+            if !self.visible_slot_rows.contains(&slot) {
+                self.on_clear_midi_slot_clicked(slot, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    fn on_piano_roll_visibility_toggled(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        if self.piano_roll_hidden_rows.contains(&row_index) {
+            self.piano_roll_hidden_rows.remove(&row_index);
+        } else {
+            self.piano_roll_hidden_rows.insert(row_index);
+        }
+        cx.notify();
+    }
+
+    fn on_slot_source_toggled(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
+        let current = self.source_for_slot(slot);
+        let next = match current {
+            ReferenceSource::File => ReferenceSource::Live,
+            ReferenceSource::Live => ReferenceSource::File,
+        };
+        self.on_reference_source_selected(slot, next, cx);
     }
 
     fn settings_tab_button_id(tab: SettingsTab) -> &'static str {
@@ -733,13 +701,6 @@ impl SonantMainWindow {
             SettingsTab::ApiKeys => "settings-tab-api-keys",
             SettingsTab::MidiSettings => "settings-tab-midi-settings",
             SettingsTab::General => "settings-tab-general",
-        }
-    }
-
-    fn on_reference_slot_selected(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
-        if self.selected_reference_slot != slot {
-            self.selected_reference_slot = slot;
-            cx.notify();
         }
     }
 
@@ -767,10 +728,6 @@ impl SonantMainWindow {
             &self.midi_input_router,
         ));
         references
-    }
-
-    fn live_channel_used_by_other_slots(&self, slot: ReferenceSlot, channel: u8) -> bool {
-        live_channel_used_by_other_slots(&self.input_track_model, slot, channel)
     }
 
     fn ensure_live_channel_mapping_for_slot(&mut self, slot: ReferenceSlot) -> Result<(), String> {
@@ -811,31 +768,46 @@ impl SonantMainWindow {
 
         if let Err(error) = self.input_track_model.set_source_for_slot(slot, source) {
             self.input_track_error = Some(error.to_string());
-        } else {
-            if let Err(error) = self.sync_midi_input_router_config() {
-                self.input_track_error = Some(error);
-            }
-            self.selected_reference_slot = slot;
+        } else if let Err(error) = self.sync_midi_input_router_config() {
+            self.input_track_error = Some(error);
         }
 
         cx.notify();
     }
 
-    fn on_live_channel_selected(
+    fn on_channel_menu_toggled(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        self.channel_menu_open = if self.channel_menu_open == Some(row_index) {
+            None
+        } else {
+            Some(row_index)
+        };
+        cx.notify();
+    }
+
+    fn on_slot_type_menu_toggled(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        self.slot_type_menu_open = if self.slot_type_menu_open == Some(row_index) {
+            None
+        } else {
+            Some(row_index)
+        };
+        cx.notify();
+    }
+
+    fn on_slot_type_selected(
         &mut self,
-        slot: ReferenceSlot,
-        channel: u8,
+        row_index: usize,
+        new_slot: ReferenceSlot,
         cx: &mut Context<Self>,
     ) {
-        self.input_track_error = None;
-
-        if self.source_for_slot(slot) != ReferenceSource::Live {
-            return;
+        if row_index < self.visible_slot_rows.len() {
+            self.visible_slot_rows[row_index] = new_slot;
         }
-        if self.live_channel_used_by_other_slots(slot, channel) {
-            return;
-        }
+        self.slot_type_menu_open = None;
+        cx.notify();
+    }
 
+    fn on_channel_selected(&mut self, slot: ReferenceSlot, channel: u8, cx: &mut Context<Self>) {
+        self.channel_menu_open = None;
         if let Err(error) = self
             .input_track_model
             .set_channel_mapping(ChannelMapping { slot, channel })
@@ -844,7 +816,6 @@ impl SonantMainWindow {
         } else if let Err(error) = self.sync_midi_input_router_config() {
             self.input_track_error = Some(error);
         }
-
         cx.notify();
     }
 
@@ -865,7 +836,7 @@ impl SonantMainWindow {
         if let Some(existing) = self
             .midi_slot_errors
             .iter_mut()
-            .find(|existing| existing.slot == error.slot)
+            .find(|e| e.slot == error.slot && e.row_index == error.row_index)
         {
             *existing = error;
         } else {
@@ -878,10 +849,19 @@ impl SonantMainWindow {
             .retain(|existing| existing.slot != slot);
     }
 
-    fn midi_slot_error_for_slot(&self, slot: ReferenceSlot) -> Option<&MidiSlotErrorState> {
+    fn clear_midi_slot_error_for_row(&mut self, slot: ReferenceSlot, row_index: usize) {
+        self.midi_slot_errors
+            .retain(|e| !(e.slot == slot && e.row_index == row_index));
+    }
+
+    fn midi_slot_error_for_row(
+        &self,
+        slot: ReferenceSlot,
+        row_index: usize,
+    ) -> Option<&MidiSlotErrorState> {
         self.midi_slot_errors
             .iter()
-            .find(|error| error.slot == slot)
+            .find(|e| e.slot == slot && e.row_index == row_index)
     }
 
     fn sync_midi_input_router_config(&mut self) -> Result<(), String> {
@@ -1003,11 +983,17 @@ impl SonantMainWindow {
         });
     }
 
-    fn on_select_midi_file_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.source_for_slot(self.selected_reference_slot) != ReferenceSource::File {
+    fn on_select_midi_file_clicked(
+        &mut self,
+        slot: ReferenceSlot,
+        row_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.source_for_slot(slot) != ReferenceSource::File {
             self.input_track_error = Some(format!(
                 "{} is set to Live input. Switch source to File to load MIDI files.",
-                Self::reference_slot_label(self.selected_reference_slot)
+                Self::reference_slot_label(slot)
             ));
             cx.notify();
             return;
@@ -1031,10 +1017,10 @@ impl SonantMainWindow {
                 Ok(Some(paths)) => {
                     if let Some(path) = paths.into_iter().next() {
                         let _ = view.update_in(window, |view, _window, cx| {
-                            let slot = view.selected_reference_slot;
                             if !has_supported_midi_extension(&path) {
                                 view.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
                                     slot,
+                                    row_index,
                                     MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
                                 ));
                                 cx.notify();
@@ -1042,7 +1028,7 @@ impl SonantMainWindow {
                             }
 
                             let path = path.to_string_lossy().to_string();
-                            view.set_midi_slot_file(slot, path, cx);
+                            view.set_midi_slot_file(slot, row_index, path, cx);
                         });
                     }
                 }
@@ -1050,9 +1036,8 @@ impl SonantMainWindow {
                 Err(error) => {
                     let message = format!("Could not open the file dialog: {error}");
                     let _ = view.update_in(window, |view, _window, cx| {
-                        let slot = view.selected_reference_slot;
                         view.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
-                            slot, message,
+                            slot, row_index, message,
                         ));
                         cx.notify();
                     });
@@ -1061,8 +1046,13 @@ impl SonantMainWindow {
         });
     }
 
-    fn on_midi_slot_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        let slot = self.selected_reference_slot;
+    fn on_midi_slot_drop(
+        &mut self,
+        slot: ReferenceSlot,
+        row_index: usize,
+        paths: &ExternalPaths,
+        cx: &mut Context<Self>,
+    ) {
         if self.source_for_slot(slot) != ReferenceSource::File {
             self.input_track_error = Some(format!(
                 "{} is set to Live input. Switch source to File to load dropped MIDI files.",
@@ -1074,17 +1064,24 @@ impl SonantMainWindow {
         let Some(path) = dropped_path_to_load(paths) else {
             self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
                 slot,
+                row_index,
                 MIDI_SLOT_DROP_ERROR_MESSAGE,
             ));
             cx.notify();
             return;
         };
 
-        self.set_midi_slot_file(slot, path, cx);
+        self.set_midi_slot_file(slot, row_index, path, cx);
     }
 
-    fn set_midi_slot_file(&mut self, slot: ReferenceSlot, path: String, cx: &mut Context<Self>) {
-        self.clear_midi_slot_error(slot);
+    fn set_midi_slot_file(
+        &mut self,
+        slot: ReferenceSlot,
+        row_index: usize,
+        path: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_midi_slot_error_for_row(slot, row_index);
         match self.load_midi_use_case.execute(LoadMidiCommand::SetFile {
             slot,
             path: path.clone(),
@@ -1092,37 +1089,34 @@ impl SonantMainWindow {
             Ok(_) => cx.notify(),
             Err(error) => {
                 self.upsert_midi_slot_error(MidiSlotErrorState::from_load_error(
-                    slot, &path, &error,
+                    slot, row_index, &path, &error,
                 ));
                 cx.notify();
             }
         }
     }
 
-    fn on_retry_midi_slot_clicked(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
+    fn on_retry_midi_slot_clicked(
+        &mut self,
+        slot: ReferenceSlot,
+        row_index: usize,
+        cx: &mut Context<Self>,
+    ) {
         let retry_path = self
-            .midi_slot_error_for_slot(slot)
+            .midi_slot_error_for_row(slot, row_index)
             .and_then(|error| error.retry_path.clone());
         if let Some(path) = retry_path {
-            self.set_midi_slot_file(slot, path, cx);
+            self.set_midi_slot_file(slot, row_index, path, cx);
         }
     }
 
-    fn on_clear_midi_slot_clicked(&mut self, cx: &mut Context<Self>) {
-        let slot = self.selected_reference_slot;
+    fn on_clear_midi_slot_clicked(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
         self.clear_midi_slot_error(slot);
-        match self
+        if let Ok(_) = self
             .load_midi_use_case
             .execute(LoadMidiCommand::ClearSlot { slot })
         {
-            Ok(_) => cx.notify(),
-            Err(error) => {
-                self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
-                    slot,
-                    error.user_message(),
-                ));
-                cx.notify();
-            }
+            cx.notify();
         }
     }
 
@@ -1339,6 +1333,7 @@ fn format_live_reference_event_payload(event: LiveInputEvent) -> String {
     )
 }
 
+#[allow(dead_code)]
 fn live_channel_used_by_other_slots(
     model: &InputTrackModel,
     slot: ReferenceSlot,
@@ -1589,25 +1584,12 @@ impl Render for SonantMainWindow {
         let status_label = self.generation_status.label();
         let status_color = self.generation_status.color(colors);
         let generating = self.generation_status.is_submitting_or_running();
-        let selected_slot = self.selected_reference_slot;
-        let selected_reference_source = self.source_for_slot(selected_slot);
-        let selected_live_channel = self.channel_mapping_for_slot(selected_slot);
-        let selected_slot_accepts_file_drop = selected_reference_source == ReferenceSource::File;
-        let file_references = self.load_midi_use_case.snapshot_references();
         let generation_references = self.collect_generation_references();
-        let live_channel_mappings = self.input_track_model.live_channel_mappings();
         let mode_requirement = mode_reference_requirement(self.selected_generation_mode);
         let mode_requirement_satisfied = mode_reference_requirement_satisfied(
             self.selected_generation_mode,
             &generation_references,
         );
-        let selected_slot_references: Vec<&_> = file_references
-            .iter()
-            .filter(|reference| reference.slot == selected_slot)
-            .collect();
-        let selected_slot_reference_count = selected_slot_references.len();
-        let selected_slot_set = selected_slot_reference_count > 0;
-        let selected_slot_error = self.midi_slot_error_for_slot(selected_slot).cloned();
 
         div()
             .size_full()
@@ -1809,6 +1791,13 @@ impl Render for SonantMainWindow {
                                     ),
                             )
                             .child(
+                                {
+                                let visible_slot_rows = self.visible_slot_rows.clone();
+                                let add_menu_open = self.add_track_menu_open;
+                                let channel_menu_open = self.channel_menu_open;
+                                let slot_type_menu_open = self.slot_type_menu_open;
+                                let has_visible = !visible_slot_rows.is_empty();
+
                                 div()
                                     .id("input-tracks-section")
                                     .w_full()
@@ -1818,292 +1807,548 @@ impl Render for SonantMainWindow {
                                     .pt(spacing.panel_padding)
                                     .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .child(Self::section_label("Input Tracks", colors))
-                                    .child(Label::new("Reference Slot"))
-                                    .child(
-                                        div().w_full().h(px(36.0)).child(
-                                            Select::new(&self.reference_slot_dropdown)
-                                                .placeholder("Select reference slot"),
-                                        ),
-                                    )
-                                    .child(Label::new("Source"))
-                                    .child(
-                                        div().w_full().h(px(36.0)).child(
-                                            Select::new(&self.reference_source_dropdown)
-                                                .placeholder("Select source"),
-                                        ),
-                                    )
-                                    .children(
-                                        std::iter::once(selected_reference_source)
-                                            .filter(|source| *source == ReferenceSource::Live)
-                                            .map(|_| {
-                                                let live_channel_button_row = |start: u8, end: u8| {
-                                                    div()
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap_1()
-                                                        .children((start..=end).map(|channel| {
-                                                            let disabled = live_channel_used_by_other_slots_in_mappings(
-                                                                &live_channel_mappings,
-                                                                selected_slot,
-                                                                channel,
-                                                            );
-                                                            let button = Button::new(
-                                                                Self::input_track_channel_button_id(
-                                                                    selected_slot,
-                                                                    channel,
-                                                                ),
-                                                            )
-                                                            .label(if disabled {
-                                                                format!("{channel}*")
-                                                            } else {
-                                                                channel.to_string()
-                                                            })
-                                                            .disabled(disabled)
-                                                            .on_click(cx.listener(
-                                                                move |this, _, _window, cx| {
-                                                                    this.on_live_channel_selected(
-                                                                        selected_slot,
-                                                                        channel,
-                                                                        cx,
-                                                                    )
-                                                                },
-                                                            ));
-                                                            if selected_live_channel == Some(channel) {
-                                                                button.primary()
-                                                            } else {
-                                                                button
-                                                            }
-                                                        }))
-                                                };
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap_1()
-                                                    .child(live_channel_button_row(1, 8))
-                                                    .child(live_channel_button_row(9, 16))
-                                                    .child("* Channels marked with * are already assigned to another slot")
-                                            }),
-                                    )
                                     .child(
                                         div()
-                                            .id("midi-slot-selected")
                                             .flex()
-                                            .flex_col()
-                                            .gap_2()
-                                            .p(spacing.panel_compact_padding)
-                                            .rounded(radius.control)
-                                            .border_1()
-                                            .border_color(colors.panel_border)
-                                            .bg(colors.surface_background)
-                                            .can_drop(move |value, _, _| {
-                                                selected_slot_accepts_file_drop
-                                                    && value
+                                            .items_center()
+                                            .justify_between()
+                                            .child(Self::section_label("Input Tracks", colors))
+                                            .child(
+                                                    div()
+                                                        .id("add-track-btn-header")
+                                                        .px_1()
+                                                        .py(px(2.0))
+                                                        .rounded(radius.control)
+                                                        .text_size(px(11.0))
+                                                        .text_color(if add_menu_open { colors.primary } else { colors.muted_foreground })
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.text_color(colors.primary).bg(colors.input_background))
+                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                            this.on_add_track_clicked(cx);
+                                                        }))
+                                                        .child(if add_menu_open { "- Cancel" } else { "+ Add" }),
+                                            ),
+                                    )
+                                    // Add Track menu (shown when add_menu_open)
+                                    .when(add_menu_open, |el| {
+                                        el.child(
+                                            div()
+                                                .id("add-track-menu")
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_active_border)
+                                                .bg(colors.panel_background)
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .px_3()
+                                                        .py(px(6.0))
+                                                        .border_b_1()
+                                                        .border_color(colors.panel_border)
+                                                        .text_size(px(10.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                        .child("SELECT TYPE"),
+                                                )
+                                                .children(Self::reference_slots().iter().copied().map(|slot| {
+                                                    let slot_color = colors.slot_color(slot);
+                                                    let short_label = Self::slot_short_label(slot);
+                                                    div()
+                                                        .id(("add-slot-option", Self::reference_slot_index(slot)))
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .h(px(36.0))
+                                                        .px_2()
+                                                        .bg(colors.panel_background)
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(colors.panel_active_background))
+                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                            this.on_add_track_slot_selected(slot, cx);
+                                                        }))
+                                                        .child(
+                                                            div()
+                                                                .w(px(6.0))
+                                                                .h(px(20.0))
+                                                                .flex_none()
+                                                                .rounded(px(2.0))
+                                                                .bg(slot_color),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .text_size(px(12.0))
+                                                                .text_color(colors.surface_foreground)
+                                                                .child(Self::reference_slot_label(slot)),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .px(px(6.0))
+                                                                .py(px(2.0))
+                                                                .rounded(px(4.0))
+                                                                .text_size(px(9.0))
+                                                                .text_color(slot_color)
+                                                                .font_weight(gpui::FontWeight::BOLD)
+                                                                .border_1()
+                                                                .border_color(slot_color)
+                                                                .child(short_label),
+                                                        )
+                                                })),
+                                        )
+                                    })
+                                    // Empty state drop zone (no tracks added yet)
+                                    .when(!has_visible && !add_menu_open, |el| {
+                                        el.child(
+                                            div()
+                                                .id("input-tracks-empty")
+                                                .w_full()
+                                                .py(px(24.0))
+                                                .flex()
+                                                .flex_col()
+                                                .items_center()
+                                                .justify_center()
+                                                .gap_2()
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_border)
+                                                .bg(colors.input_background)
+                                                .can_drop(move |value, _, _| {
+                                                    value
                                                         .downcast_ref::<ExternalPaths>()
                                                         .is_some_and(|paths| !paths.paths().is_empty())
-                                            })
-                                            .drag_over::<ExternalPaths>(move |style, paths, _, _| {
-                                                if !selected_slot_accepts_file_drop {
-                                                    style
-                                                        .border_color(colors.panel_border)
-                                                        .bg(colors.surface_background)
-                                                } else if choose_dropped_midi_path(paths.paths()).is_some() {
-                                                    style
-                                                        .border_color(colors.panel_active_border)
-                                                        .bg(colors.panel_active_background)
-                                                } else {
-                                                    style
-                                                        .border_color(colors.drop_invalid_border)
-                                                        .bg(colors.drop_invalid_background)
-                                                }
-                                            })
-                                            .on_drop(cx.listener(
-                                                |this, paths: &ExternalPaths, _window, cx| {
-                                                    this.on_midi_slot_drop(paths, cx)
-                                                },
-                                            ))
-                                            .children(selected_slot_references.iter().enumerate().map(
-                                                |(index, reference)| {
-                                                    let slot_file_path = reference
-                                                        .file
-                                                        .as_ref()
-                                                        .map(|file| file.path.clone())
-                                                        .unwrap_or_else(|| "Not set".to_string());
-                                                    let slot_file_label =
-                                                        display_file_name_from_path(&slot_file_path);
-                                                    let slot_stats = format!(
-                                                        "Bars: {} / Notes: {}",
-                                                        reference.bars, reference.note_count
-                                                    );
+                                                })
+                                                .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                                                    if choose_dropped_midi_path(paths.paths()).is_some() {
+                                                        style
+                                                            .border_color(colors.panel_active_border)
+                                                            .bg(colors.panel_active_background)
+                                                    } else {
+                                                        style
+                                                            .border_color(colors.drop_invalid_border)
+                                                            .bg(colors.drop_invalid_background)
+                                                    }
+                                                })
+                                                .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                                                    // Drop onto empty zone: add Melody slot and load file
+                                                    let first_slot = ReferenceSlot::Melody;
+                                                    this.on_add_track_slot_selected(first_slot, cx);
+                                                    let row_index = this.visible_slot_rows.len().saturating_sub(1);
+                                                    this.on_midi_slot_drop(first_slot, row_index, paths, cx);
+                                                }))
+                                                .child(
                                                     div()
+                                                        .text_size(px(20.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .child("♪"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.0))
+                                                        .text_color(colors.surface_foreground)
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .child("Drop MIDI file or click + Add"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .child("Add reference tracks to guide generation"),
+                                                ),
+                                        )
+                                    })
+                                    // Track list (only visible slots)
+                                    .when(has_visible, |el| {
+                                        el.child(
+                                            div()
+                                                .id("input-tracks-list")
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_border)
+                                                .bg(colors.input_background)
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .id("input-tracks-column-header")
                                                         .flex()
-                                                        .flex_col()
-                                                        .gap_1()
-                                                        .p(spacing.panel_compact_padding)
-                                                        .rounded(radius.control)
-                                                        .border_1()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .px_3()
+                                                        .py(px(6.0))
+                                                        .border_b_1()
                                                         .border_color(colors.panel_border)
                                                         .bg(colors.panel_background)
                                                         .child(
                                                             div()
-                                                                .text_color(colors.accent_foreground)
-                                                                .child(format!(
-                                                                    "#{}: {slot_file_label}",
-                                                                    index + 1
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_color(colors.accent_foreground)
-                                                                .child(slot_stats),
-                                                        )
-                                                        .child(
-                                                            div()
+                                                                .text_size(px(10.0))
                                                                 .text_color(colors.muted_foreground)
-                                                                .child(slot_file_path),
+                                                                .font_weight(gpui::FontWeight::BOLD)
+                                                                .child("Source"),
                                                         )
-                                                },
-                                            ))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        Button::new("midi-slot-select-button")
-                                                            .label("Select MIDI File")
-                                                            .disabled(!selected_slot_accepts_file_drop)
-                                                            .on_click(cx.listener(
-                                                                |this, _, window, cx| {
-                                                                    this.on_select_midi_file_clicked(window, cx)
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        Button::new("midi-slot-clear-button")
-                                                            .label("Clear Slot")
-                                                            .disabled(
-                                                                !selected_slot_set
-                                                                    || !selected_slot_accepts_file_drop,
+                                                        .child(
+                                                            div()
+                                                                .pr(px(24.0))
+                                                                .text_size(px(10.0))
+                                                                .text_color(colors.muted_foreground)
+                                                                .font_weight(gpui::FontWeight::BOLD)
+                                                                .child("Type"),
+                                                        ),
+                                                )
+                                                .children(visible_slot_rows.iter().copied().enumerate().map(|(row_index, slot)| {
+                                                    let slot_color = colors.slot_color(slot);
+                                                    let source_label = self.slot_source_display_label(slot);
+                                                    let short_label = Self::slot_short_label(slot);
+                                                    let is_live = self.source_for_slot(slot) == ReferenceSource::Live;
+                                                    let live_ch = self.channel_mapping_for_slot(slot).unwrap_or(1);
+                                                    let monitoring_on = is_live && self.recording_enabled_for_channel(live_ch);
+                                                    let slot_error = self.midi_slot_error_for_row(slot, row_index).cloned();
+                                                    let piano_roll_visible = !self.piano_roll_hidden_rows.contains(&row_index);
+                                                    // グレーアウト用の色（非表示行は薄く）
+                                                    let row_slot_color = if piano_roll_visible { slot_color } else { slot_color.opacity(0.25) };
+                                                    let row_fg = if piano_roll_visible { colors.surface_foreground } else { colors.muted_foreground.opacity(0.4) };
+
+                                                    div()
+                                                        .id(("track-row", row_index))
+                                                        .flex()
+                                                        .items_center()
+                                                        .h(px(40.0))
+                                                        .bg(if piano_roll_visible {
+                                                            colors.panel_background
+                                                        } else {
+                                                            colors.panel_background.opacity(0.4)
+                                                        })
+                                                        .hover(|s| s.bg(colors.input_background))
+                                                        .can_drop(move |value, _, _| {
+                                                            !is_live
+                                                                && value
+                                                                    .downcast_ref::<ExternalPaths>()
+                                                                    .is_some_and(|paths| !paths.paths().is_empty())
+                                                        })
+                                                        .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                                                            if is_live {
+                                                                style
+                                                            } else if choose_dropped_midi_path(paths.paths()).is_some() {
+                                                                style
+                                                                    .border_color(colors.panel_active_border)
+                                                                    .bg(colors.panel_active_background)
+                                                            } else {
+                                                                style
+                                                                    .border_color(colors.drop_invalid_border)
+                                                                    .bg(colors.drop_invalid_background)
+                                                            }
+                                                        })
+                                                        .on_drop(cx.listener(
+                                                            move |this, paths: &ExternalPaths, _window, cx| {
+                                                                this.on_midi_slot_drop(slot, row_index, paths, cx)
+                                                            },
+                                                        ))
+                                                        // Color stripe
+                                                        .child(
+                                                            div()
+                                                                .w(px(6.0))
+                                                                .h_full()
+                                                                .flex_none()
+                                                                .bg(row_slot_color),
+                                                        )
+                                                        // Source label + type badge (always clickable)
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_2()
+                                                                .px_2()
+                                                                .min_w(px(0.0))
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-source-label", row_index))
+                                                                        .flex_1()
+                                                                        .min_w(px(0.0))
+                                                                        .overflow_hidden()
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(row_fg)
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.text_color(colors.primary))
+                                                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                                                            if is_live {
+                                                                                this.on_channel_menu_toggled(row_index, cx);
+                                                                            } else {
+                                                                                this.on_select_midi_file_clicked(slot, row_index, window, cx);
+                                                                            }
+                                                                        }))
+                                                                        .child(source_label),
+                                                                )
+                                                                // Type badge (clickable → slot type menu)
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-type-badge", row_index))
+                                                                        .flex_none()
+                                                                        .px(px(6.0))
+                                                                        .py(px(2.0))
+                                                                        .rounded(px(4.0))
+                                                                        .text_size(px(9.0))
+                                                                        .text_color(row_slot_color)
+                                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                                        .border_1()
+                                                                        .border_color(row_slot_color)
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.bg(colors.input_background))
+                                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                            this.on_slot_type_menu_toggled(row_index, cx);
+                                                                        }))
+                                                                        .child(short_label),
+                                                                ),
+                                                        )
+                                                        // Action buttons (fixed layout: source toggle + monitor + remove)
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_1()
+                                                                .pr_2()
+                                                                .pl_2()
+                                                                .h(px(24.0))
+                                                                .border_l_1()
+                                                                .border_color(colors.panel_border)
+                                                                // Source toggle
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-source-toggle", row_index))
+                                                                        .px(px(4.0))
+                                                                        .py(px(2.0))
+                                                                        .rounded(px(3.0))
+                                                                        .text_size(px(9.0))
+                                                                        .text_color(if is_live { colors.surface_foreground } else { colors.muted_foreground })
+                                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.text_color(colors.surface_foreground).bg(colors.input_background))
+                                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                            this.on_slot_source_toggled(slot, cx);
+                                                                        }))
+                                                                        .child(if is_live { "INPUT" } else { "FILE" }),
+                                                                )
+                                                                // Monitoring toggle (LIVE only)
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-monitor", row_index))
+                                                                        .w(px(20.0))
+                                                                        .h(px(20.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .rounded(px(999.0))
+                                                                        .text_size(px(12.0))
+                                                                        .text_color(if is_live {
+                                                                            if monitoring_on { colors.error_foreground } else { colors.muted_foreground }
+                                                                        } else {
+                                                                            colors.panel_border
+                                                                        })
+                                                                        .when(is_live, |el| {
+                                                                            el.cursor_pointer()
+                                                                                .hover(|s| s.text_color(colors.surface_foreground))
+                                                                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                                    this.on_recording_channel_toggled(live_ch, cx);
+                                                                                }))
+                                                                        })
+                                                                        .child("●"),
+                                                                )
+                                                                // Piano roll visibility toggle
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-visible", row_index))
+                                                                        .w(px(20.0))
+                                                                        .h(px(20.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .rounded(px(999.0))
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(if piano_roll_visible { colors.surface_foreground } else { colors.panel_border })
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.text_color(colors.surface_foreground))
+                                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                            this.on_piano_roll_visibility_toggled(row_index, cx);
+                                                                        }))
+                                                                        .child(if piano_roll_visible { "◉" } else { "◌" }),
+                                                                )
+
+                                                                // Remove track button — trash icon
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-remove", row_index))
+                                                                        .w(px(20.0))
+                                                                        .h(px(20.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .rounded(px(999.0))
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(colors.muted_foreground)
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.text_color(colors.error_foreground))
+                                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                            this.on_remove_track_row(row_index, cx);
+                                                                        }))
+                                                                        .child("✕"),
+                                                                ),
+                                                        )
+                                                        // Error indicator
+                                                        .children(slot_error.into_iter().map(|error| {
+                                                            let error_row = error.row_index;
+                                                            let can_retry = error.can_retry();
+                                                            div()
+                                                                .id(("slot-error", error_row))
+                                                                .absolute()
+                                                                .bottom(px(0.0))
+                                                                .left(px(6.0))
+                                                                .right(px(0.0))
+                                                                .text_size(px(9.0))
+                                                                .text_color(colors.error_foreground)
+                                                                .overflow_hidden()
+                                                                .child(format!("Error: {}", error.message))
+                                                                .when(can_retry, |el| {
+                                                                    el.cursor_pointer()
+                                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                            this.on_retry_midi_slot_clicked(slot, error_row, cx);
+                                                                        }))
+                                                                })
+                                                        }))
+                                                }))
+                                        )
+                                    })
+                                    // Channel selection menu (shown when a LIVE row's label is clicked)
+                                    .when(channel_menu_open.is_some(), |el| {
+                                        let open_row = channel_menu_open.unwrap_or(0);
+                                        let menu_slot = visible_slot_rows.get(open_row).copied().unwrap_or(ReferenceSlot::Melody);
+                                        let current_ch = self.channel_mapping_for_slot(menu_slot).unwrap_or(1);
+                                        el.child(
+                                            div()
+                                                .id("channel-select-menu")
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_active_border)
+                                                .bg(colors.panel_background)
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .px_3()
+                                                        .py(px(6.0))
+                                                        .border_b_1()
+                                                        .border_color(colors.panel_border)
+                                                        .text_size(px(10.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                        .child("SELECT MIDI CHANNEL"),
+                                                )
+                                                .children((MIDI_CHANNEL_MIN..=MIDI_CHANNEL_MAX).map(|ch| {
+                                                    let is_selected = ch == current_ch;
+                                                    div()
+                                                        .id(("ch-option", ch as usize))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .h(px(28.0))
+                                                        .px_3()
+                                                        .bg(if is_selected { colors.panel_active_background } else { colors.panel_background })
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(colors.panel_active_background))
+                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                            this.on_channel_selected(menu_slot, ch, cx);
+                                                        }))
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(11.0))
+                                                                .text_color(if is_selected { colors.surface_foreground } else { colors.muted_foreground })
+                                                                .font_weight(if is_selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                                                .child(format!("Channel {ch}")),
+                                                        )
+                                                        .when(is_selected, |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .text_size(px(10.0))
+                                                                    .text_color(colors.primary)
+                                                                    .child("✓"),
                                                             )
-                                                            .on_click(cx.listener(
-                                                                |this, _, _window, cx| {
-                                                                    this.on_clear_midi_slot_clicked(cx)
-                                                                },
-                                                            )),
-                                                    ),
-                                            ),
-                                    )
+                                                        })
+                                                })),
+                                        )
+                                    })
+                                    // Slot type selection menu (shown when a type badge is clicked)
+                                    .when(slot_type_menu_open.is_some(), |el| {
+                                        let open_row = slot_type_menu_open.unwrap_or(0);
+                                        let current_slot = visible_slot_rows.get(open_row).copied().unwrap_or(ReferenceSlot::Melody);
+                                        el.child(
+                                            div()
+                                                .id("slot-type-select-menu")
+                                                .rounded(radius.control)
+                                                .border_1()
+                                                .border_color(colors.panel_active_border)
+                                                .bg(colors.panel_background)
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .px_3()
+                                                        .py(px(6.0))
+                                                        .border_b_1()
+                                                        .border_color(colors.panel_border)
+                                                        .text_size(px(10.0))
+                                                        .text_color(colors.muted_foreground)
+                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                        .child("SELECT REFERENCE TYPE"),
+                                                )
+                                                .children(Self::reference_slots().iter().copied().map(|slot_opt| {
+                                                    let is_selected = slot_opt == current_slot;
+                                                    let slot_color = colors.slot_color(slot_opt);
+                                                    div()
+                                                        .id(("slot-type-option", slot_opt as usize))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .h(px(28.0))
+                                                        .px_3()
+                                                        .bg(if is_selected { colors.panel_active_background } else { colors.panel_background })
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(colors.panel_active_background))
+                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                            this.on_slot_type_selected(open_row, slot_opt, cx);
+                                                        }))
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_2()
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(4.0))
+                                                                        .h(px(14.0))
+                                                                        .rounded(px(2.0))
+                                                                        .bg(slot_color),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(if is_selected { colors.surface_foreground } else { colors.muted_foreground })
+                                                                        .font_weight(if is_selected { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                                                        .child(Self::reference_slot_label(slot_opt)),
+                                                                ),
+                                                        )
+                                                        .when(is_selected, |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .text_size(px(10.0))
+                                                                    .text_color(colors.primary)
+                                                                    .child("✓"),
+                                                            )
+                                                        })
+                                                })),
+                                        )
+                                    })
                                     .children(self.input_track_error.iter().map(|message| {
                                         div()
                                             .text_color(colors.error_foreground)
+                                            .text_size(px(11.0))
                                             .child(format!("Input Tracks: {message}"))
                                     }))
-                                    .children(selected_slot_error.into_iter().map(|error| {
-                                        let slot_label = Self::reference_slot_label(error.slot);
-                                        let retry_slot = error.slot;
-                                        let slot_is_file_source =
-                                            self.source_for_slot(error.slot) == ReferenceSource::File;
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_2()
-                                            .child(
-                                                div().text_color(colors.error_foreground).child(format!(
-                                                    "Reference MIDI ({slot_label}): {}",
-                                                    error.message
-                                                )),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        Button::new("midi-slot-retry-button")
-                                                            .label("Retry")
-                                                            .disabled(
-                                                                !error.can_retry() || !slot_is_file_source,
-                                                            )
-                                                            .on_click(cx.listener(
-                                                                move |this, _, _window, cx| {
-                                                                    this.on_retry_midi_slot_clicked(
-                                                                        retry_slot,
-                                                                        cx,
-                                                                    )
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        Button::new("midi-slot-reselect-button")
-                                                            .label("Choose Another File")
-                                                            .disabled(!slot_is_file_source)
-                                                            .on_click(cx.listener(
-                                                                |this, _, window, cx| {
-                                                                    this.on_select_midi_file_clicked(window, cx)
-                                                                },
-                                                            )),
-                                                    ),
-                                            )
-                                    }))
-                                    .child(
-                                        div()
-                                            .id("recording-channel-panel")
-                                            .flex()
-                                            .flex_col()
-                                            .gap_2()
-                                            .p(spacing.panel_compact_padding)
-                                            .rounded(radius.control)
-                                            .border_1()
-                                            .border_color(colors.panel_border)
-                                            .bg(colors.surface_background)
-                                            .child(
-                                                div()
-                                                    .text_color(colors.muted_foreground)
-                                                    .child("Recording enable state per MIDI channel."),
-                                            )
-                                            .child({
-                                                let recording_channel_button_row =
-                                                    |start: u8, end: u8| {
-                                                        div()
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap_1()
-                                                            .children((start..=end).map(|channel| {
-                                                                let enabled =
-                                                                    self.recording_enabled_for_channel(channel);
-                                                                let button = Button::new(
-                                                                    Self::recording_channel_button_id(
-                                                                        channel,
-                                                                    ),
-                                                                )
-                                                                .label(if enabled {
-                                                                    format!("Ch {channel} ON")
-                                                                } else {
-                                                                    format!("Ch {channel} OFF")
-                                                                })
-                                                                .on_click(cx.listener(
-                                                                    move |this, _, _window, cx| {
-                                                                        this.on_recording_channel_toggled(
-                                                                            channel, cx,
-                                                                        )
-                                                                    },
-                                                                ));
-                                                                if enabled {
-                                                                    button.primary()
-                                                                } else {
-                                                                    button
-                                                                }
-                                                            }))
-                                                    };
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap_1()
-                                                    .child(recording_channel_button_row(1, 8))
-                                                    .child(recording_channel_button_row(9, 16))
-                                            }),
-                                    ),
+                            }
                             )
                             .child(
                                 div()

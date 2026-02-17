@@ -504,8 +504,12 @@ mod tests {
                 message: "file locked".to_string(),
             },
         };
-        let io_state =
-            MidiSlotErrorState::from_load_error(ReferenceSlot::Melody, "/tmp/retry.mid", &io_error);
+        let io_state = MidiSlotErrorState::from_load_error(
+            ReferenceSlot::Melody,
+            0,
+            "/tmp/retry.mid",
+            &io_error,
+        );
         assert!(io_state.can_retry());
         assert_eq!(io_state.slot, ReferenceSlot::Melody);
         assert_eq!(io_state.retry_path.as_deref(), Some("/tmp/retry.mid"));
@@ -517,6 +521,7 @@ mod tests {
         };
         let parse_state = MidiSlotErrorState::from_load_error(
             ReferenceSlot::CounterMelody,
+            0,
             "/tmp/broken.mid",
             &parse_error,
         );
@@ -530,6 +535,7 @@ mod tests {
         };
         let extension_state = MidiSlotErrorState::from_load_error(
             ReferenceSlot::Harmony,
+            0,
             "/tmp/invalid.wav",
             &extension_error,
         );

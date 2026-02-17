@@ -1,5 +1,6 @@
 use gpui::{App, Global, Hsla, Pixels, SharedString, px, rgb};
 use gpui_component::Theme;
+use sonant::domain::ReferenceSlot;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ThemeColors {
@@ -20,18 +21,13 @@ pub(super) struct ThemeColors {
     pub(super) progress_foreground: Hsla,
     pub(super) drop_invalid_border: Hsla,
     pub(super) drop_invalid_background: Hsla,
-    #[allow(dead_code)]
     pub(super) track_purple: Hsla,
-    #[allow(dead_code)]
     pub(super) track_blue: Hsla,
-    #[allow(dead_code)]
     pub(super) track_green: Hsla,
-    #[allow(dead_code)]
     pub(super) track_red: Hsla,
-    #[allow(dead_code)]
     pub(super) track_orange: Hsla,
-    #[allow(dead_code)]
     pub(super) track_cyan: Hsla,
+    pub(super) track_pink: Hsla,
     pub(super) glow_primary: Hsla,
     #[allow(dead_code)]
     pub(super) glow_purple: Hsla,
@@ -48,6 +44,19 @@ pub(super) struct ThemeColors {
 }
 
 impl ThemeColors {
+    #[inline]
+    pub(super) fn slot_color(self, slot: ReferenceSlot) -> Hsla {
+        match slot {
+            ReferenceSlot::Melody => self.track_purple,
+            ReferenceSlot::ChordProgression => self.track_blue,
+            ReferenceSlot::DrumPattern => self.track_green,
+            ReferenceSlot::Bassline => self.track_red,
+            ReferenceSlot::CounterMelody => self.track_orange,
+            ReferenceSlot::Harmony => self.track_cyan,
+            ReferenceSlot::ContinuationSeed => self.track_pink,
+        }
+    }
+
     #[inline]
     pub(super) fn selectable_panel_border(self, selected: bool) -> Hsla {
         if selected {
@@ -80,6 +89,7 @@ pub(super) struct ThemeSpacing {
     pub(super) window_padding: Pixels,
     pub(super) section_gap: Pixels,
     pub(super) panel_padding: Pixels,
+    #[allow(dead_code)]
     pub(super) panel_compact_padding: Pixels,
 }
 
@@ -124,6 +134,7 @@ impl Default for SonantTheme {
                 track_red: rgb(0xef4444).into(),
                 track_orange: rgb(0xf97316).into(),
                 track_cyan: rgb(0x06b6d4).into(),
+                track_pink: rgb(0xec4899).into(),
                 glow_primary: rgb(0x1032e2).into(),
                 glow_purple: rgb(0xa855f7).into(),
                 glow_blue: rgb(0x3b82f6).into(),

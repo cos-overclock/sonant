@@ -59,23 +59,35 @@ impl HelperGenerationStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MidiSlotErrorState {
     pub(super) slot: ReferenceSlot,
+    pub(super) row_index: usize,
     pub(super) message: String,
     pub(super) retry_path: Option<String>,
 }
 
 impl MidiSlotErrorState {
-    pub(super) fn non_retryable(slot: ReferenceSlot, message: impl Into<String>) -> Self {
+    pub(super) fn non_retryable(
+        slot: ReferenceSlot,
+        row_index: usize,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             slot,
+            row_index,
             message: message.into(),
             retry_path: None,
         }
     }
 
-    pub(super) fn from_load_error(slot: ReferenceSlot, path: &str, error: &LoadMidiError) -> Self {
+    pub(super) fn from_load_error(
+        slot: ReferenceSlot,
+        row_index: usize,
+        path: &str,
+        error: &LoadMidiError,
+    ) -> Self {
         let retry_path = can_retry_midi_load_error(error).then(|| path.to_string());
         Self {
             slot,
+            row_index,
             message: error.user_message(),
             retry_path,
         }
