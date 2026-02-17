@@ -830,8 +830,6 @@ impl SonantMainWindow {
             .id("piano-roll-grid-frame")
             .flex_1()
             .rounded(corner_radius)
-            .border_1()
-            .border_color(colors.panel_border)
             .bg(colors.surface_background)
             .overflow_scroll()
             .scrollbar_width(px(8.0))
@@ -3101,13 +3099,7 @@ impl Render for SonantMainWindow {
                                     .min_h(px(260.0))
                                     .flex()
                                     .flex_col()
-                                    .gap_2()
-                                    .p(spacing.panel_padding)
-                                    .rounded(radius.panel)
-                                    .border_1()
-                                    .border_color(colors.panel_border)
-                                    .bg(colors.panel_background)
-                                    .child(Label::new("Piano Roll"))
+                                    .bg(colors.surface_background)
                                     .child(Self::piano_roll_grid(colors, radius.control)),
                             )
                             .child(
