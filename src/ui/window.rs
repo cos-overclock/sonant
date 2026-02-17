@@ -663,20 +663,13 @@ impl SonantMainWindow {
                     ),
             )
             .child(
-                div()
-                    .px_2()
-                    .py(px(2.0))
-                    .rounded(px(999.0))
-                    .border_1()
-                    .border_color(colors.primary.opacity(0.45))
-                    .bg(colors.input_background)
-                    .child(
-                        Slider::new(slider)
-                            .horizontal()
-                            .h(px(24.0))
-                            .bg(colors.primary)
-                            .text_color(colors.primary),
-                    ),
+                div().py(px(2.0)).child(
+                    Slider::new(slider)
+                        .horizontal()
+                        .h(px(24.0))
+                        .bg(colors.primary)
+                        .text_color(colors.primary),
+                ),
             )
             .child(
                 div()
