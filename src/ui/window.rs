@@ -56,14 +56,14 @@ const PARAM_LEVEL_SPAN: u8 = PARAM_LEVEL_MAX - PARAM_LEVEL_MIN;
 const PARAM_KEY_OPTIONS: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
-const PARAM_SCALE_OPTIONS: [&str; 7] = [
-    "Major",
-    "Minor (Aeolian)",
-    "Dorian",
-    "Phrygian",
-    "Lydian",
-    "Mixolydian",
-    "Locrian",
+const PARAM_SCALE_OPTIONS: [(&str, &str); 7] = [
+    ("Major", "major"),
+    ("Minor (Aeolian)", "Minor (Aeolian)"),
+    ("Dorian", "Dorian"),
+    ("Phrygian", "Phrygian"),
+    ("Lydian", "Lydian"),
+    ("Mixolydian", "Mixolydian"),
+    ("Locrian", "Locrian"),
 ];
 type DropdownState = SelectState<Vec<&'static str>>;
 
@@ -344,7 +344,32 @@ impl SonantMainWindow {
     }
 
     fn scale_dropdown_items() -> Vec<&'static str> {
-        PARAM_SCALE_OPTIONS.to_vec()
+        PARAM_SCALE_OPTIONS
+            .iter()
+            .map(|(label, _value)| *label)
+            .collect()
+    }
+
+    fn scale_label_from_value(value: &str) -> Option<&'static str> {
+        if value.eq_ignore_ascii_case("major") {
+            return Some("Major");
+        }
+
+        PARAM_SCALE_OPTIONS
+            .iter()
+            .find(|(_label, mapped_value)| *mapped_value == value)
+            .map(|(label, _value)| *label)
+    }
+
+    fn scale_value_from_label(label: &str) -> Option<&'static str> {
+        if label.eq_ignore_ascii_case("major") {
+            return Some("major");
+        }
+
+        PARAM_SCALE_OPTIONS
+            .iter()
+            .find(|(mapped_label, _value)| *mapped_label == label)
+            .map(|(_label, value)| *value)
     }
 
     fn generation_mode_from_label(label: &str) -> Option<GenerationMode> {
@@ -390,9 +415,7 @@ impl SonantMainWindow {
             });
         }
 
-        let selected_scale = Self::scale_dropdown_items()
-            .into_iter()
-            .find(|candidate| *candidate == self.submission_model.scale());
+        let selected_scale = Self::scale_label_from_value(self.submission_model.scale());
         if let Some(selected_scale) = selected_scale {
             self.scale_dropdown.update(cx, |state, cx| {
                 state.set_selected_value(&selected_scale, window, cx);
@@ -480,8 +503,11 @@ impl SonantMainWindow {
         let Some(selected) = selected.as_deref() else {
             return;
         };
-        if self.submission_model.scale() != selected {
-            self.submission_model.set_scale(selected);
+        let Some(scale_value) = Self::scale_value_from_label(selected) else {
+            return;
+        };
+        if self.submission_model.scale() != scale_value {
+            self.submission_model.set_scale(scale_value);
             cx.notify();
         }
     }
@@ -3368,5 +3394,29 @@ mod tests {
         assert_eq!(parse_bpm_input_value("abc"), None);
         assert_eq!(parse_bpm_input_value("19"), None);
         assert_eq!(parse_bpm_input_value("301"), None);
+    }
+
+    #[test]
+    fn scale_mapping_uses_major_display_label_for_canonical_major_value() {
+        assert_eq!(
+            super::SonantMainWindow::scale_label_from_value("major"),
+            Some("Major")
+        );
+        assert_eq!(
+            super::SonantMainWindow::scale_label_from_value("Major"),
+            Some("Major")
+        );
+    }
+
+    #[test]
+    fn scale_mapping_normalizes_major_display_label_to_canonical_major_value() {
+        assert_eq!(
+            super::SonantMainWindow::scale_value_from_label("Major"),
+            Some("major")
+        );
+        assert_eq!(
+            super::SonantMainWindow::scale_value_from_label("major"),
+            Some("major")
+        );
     }
 }

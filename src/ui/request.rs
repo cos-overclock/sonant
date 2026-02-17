@@ -10,7 +10,7 @@ use super::{
 const PARAM_LEVEL_MIN: u8 = 1;
 const PARAM_LEVEL_MAX: u8 = 5;
 const DEFAULT_KEY: &str = "C";
-const DEFAULT_SCALE: &str = "Major";
+const DEFAULT_SCALE: &str = "major";
 
 #[derive(Debug, Clone)]
 pub(super) struct PromptSubmissionModel {
