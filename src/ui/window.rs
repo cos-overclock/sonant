@@ -1661,7 +1661,7 @@ impl Render for SonantMainWindow {
                                     .bg(colors.input_background)
                                     .text_color(colors.muted_foreground)
                                     .text_size(px(10.0))
-                                    .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                                    .child(concat!("v", env!("CARGO_PKG_VERSION"))),
                             ),
                     )
                     .child(
