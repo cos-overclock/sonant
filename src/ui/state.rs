@@ -1,4 +1,4 @@
-use gpui::rgb;
+use super::theme::ThemeColors;
 use sonant::app::LoadMidiError;
 use sonant::domain::{GenerationMode, MidiReferenceSummary, ReferenceSlot};
 use sonant::infra::midi::MidiLoadError;
@@ -41,13 +41,13 @@ impl HelperGenerationStatus {
         }
     }
 
-    pub(super) fn color(&self) -> gpui::Hsla {
+    pub(super) fn color(&self, colors: ThemeColors) -> gpui::Hsla {
         match self {
-            Self::Idle => rgb(0x93c5fd).into(),
-            Self::Submitting { .. } | Self::Running { .. } => rgb(0xfbbf24).into(),
-            Self::Succeeded { .. } => rgb(0x86efac).into(),
-            Self::Failed { .. } => rgb(0xfca5a5).into(),
-            Self::Cancelled { .. } => rgb(0xfcd34d).into(),
+            Self::Idle => colors.accent_foreground,
+            Self::Submitting { .. } | Self::Running { .. } => colors.progress_foreground,
+            Self::Succeeded { .. } => colors.success_foreground,
+            Self::Failed { .. } => colors.error_foreground,
+            Self::Cancelled { .. } => colors.warning_foreground,
         }
     }
 
@@ -102,11 +102,11 @@ impl ProviderStatus {
         }
     }
 
-    pub(super) fn color(self) -> gpui::Hsla {
+    pub(super) fn color(self, colors: ThemeColors) -> gpui::Hsla {
         match self {
-            Self::Connected => rgb(0x86efac).into(),
-            Self::InvalidKey => rgb(0xfca5a5).into(),
-            Self::NotConfigured => rgb(0xfcd34d).into(),
+            Self::Connected => colors.success_foreground,
+            Self::InvalidKey => colors.error_foreground,
+            Self::NotConfigured => colors.warning_foreground,
         }
     }
 }
