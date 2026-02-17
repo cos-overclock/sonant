@@ -432,6 +432,18 @@ impl SonantMainWindow {
         });
     }
 
+    fn reconcile_bpm_input_with_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let raw = self.bpm_input.read(cx).value().to_string();
+        match parse_bpm_input_value(&raw) {
+            Some(next_bpm) => {
+                if self.submission_model.bpm() != next_bpm {
+                    self.submission_model.set_bpm(next_bpm);
+                }
+            }
+            None => self.sync_bpm_input_from_model(window, cx),
+        }
+    }
+
     fn on_generation_mode_dropdown_event(
         &mut self,
         _state: &Entity<DropdownState>,
@@ -689,6 +701,7 @@ impl SonantMainWindow {
     }
 
     fn on_generate_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reconcile_bpm_input_with_model(window, cx);
         self.validation_error = None;
 
         let references = self.collect_generation_references();
