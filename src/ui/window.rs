@@ -2134,7 +2134,7 @@ impl Render for SonantMainWindow {
                                                                         .on_click(cx.listener(move |this, _, _window, cx| {
                                                                             this.on_piano_roll_visibility_toggled(row_index, cx);
                                                                         }))
-                                                                        .child(if piano_roll_visible { "👁" } else { "🚫" }),
+                                                                        .child(if piano_roll_visible { "◉" } else { "◌" }),
                                                                 )
                                                                 // Clear file (file source with file loaded) — trash icon
                                                                 .when(!is_live && slot_has_file, |el| {
@@ -2154,7 +2154,7 @@ impl Render for SonantMainWindow {
                                                                             .on_click(cx.listener(move |this, _, _window, cx| {
                                                                                 this.on_clear_midi_slot_clicked(slot, cx);
                                                                             }))
-                                                                            .child("🗑"),
+                                                                            .child("✕"),
                                                                     )
                                                                 })
                                                                 // Remove track button — trash icon
@@ -2174,7 +2174,7 @@ impl Render for SonantMainWindow {
                                                                         .on_click(cx.listener(move |this, _, _window, cx| {
                                                                             this.on_remove_track_row(row_index, cx);
                                                                         }))
-                                                                        .child("🗑"),
+                                                                        .child("✕"),
                                                                 ),
                                                         )
                                                         // Error indicator
