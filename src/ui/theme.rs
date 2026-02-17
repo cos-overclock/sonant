@@ -2,7 +2,6 @@ use gpui::{App, Global, Hsla, Pixels, SharedString, px, rgb};
 use gpui_component::Theme;
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub(super) struct ThemeColors {
     pub(super) surface_background: Hsla,
     pub(super) surface_foreground: Hsla,
@@ -21,18 +20,31 @@ pub(super) struct ThemeColors {
     pub(super) progress_foreground: Hsla,
     pub(super) drop_invalid_border: Hsla,
     pub(super) drop_invalid_background: Hsla,
+    #[allow(dead_code)]
     pub(super) track_purple: Hsla,
+    #[allow(dead_code)]
     pub(super) track_blue: Hsla,
+    #[allow(dead_code)]
     pub(super) track_green: Hsla,
+    #[allow(dead_code)]
     pub(super) track_red: Hsla,
+    #[allow(dead_code)]
     pub(super) track_orange: Hsla,
+    #[allow(dead_code)]
     pub(super) track_cyan: Hsla,
+    #[allow(dead_code)]
     pub(super) glow_primary: Hsla,
+    #[allow(dead_code)]
     pub(super) glow_purple: Hsla,
+    #[allow(dead_code)]
     pub(super) glow_blue: Hsla,
+    #[allow(dead_code)]
     pub(super) glow_green: Hsla,
+    #[allow(dead_code)]
     pub(super) glow_red: Hsla,
+    #[allow(dead_code)]
     pub(super) glow_orange: Hsla,
+    #[allow(dead_code)]
     pub(super) glow_cyan: Hsla,
 }
 
