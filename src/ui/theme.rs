@@ -172,7 +172,7 @@ fn apply_to_gpui_component_theme(theme: &SonantTheme, cx: &mut App) {
     component_theme.background = theme.colors.surface_background;
     component_theme.foreground = theme.colors.surface_foreground;
     component_theme.border = theme.colors.panel_border;
-    component_theme.input = theme.colors.panel_border;
+    component_theme.input = theme.colors.input_background;
 
     component_theme.primary = theme.colors.primary;
     component_theme.primary_hover = theme.colors.primary_dark;
