@@ -12,6 +12,7 @@ use gpui_component::{
     label::Label,
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
+    slider::{Slider, SliderEvent, SliderState, SliderValue},
 };
 use sonant::{
     app::{
@@ -39,16 +40,19 @@ use super::utils::{
     log_generation_request_submission,
 };
 use super::{
-    DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_MODEL, JOB_UPDATE_POLL_INTERVAL_MS,
-    MIDI_SLOT_DROP_ERROR_MESSAGE, MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
-    PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
-    SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER, SETTINGS_CONTEXT_WINDOW_PLACEHOLDER,
-    SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER, SETTINGS_DEFAULT_MODEL_PLACEHOLDER,
-    SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
+    DEFAULT_ANTHROPIC_MODEL, DEFAULT_COMPLEXITY, DEFAULT_DENSITY, DEFAULT_OPENAI_COMPAT_MODEL,
+    JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE, MIDI_SLOT_FILE_PICKER_PROMPT,
+    MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER,
+    PROMPT_VALIDATION_MESSAGE, SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER,
+    SETTINGS_CONTEXT_WINDOW_PLACEHOLDER, SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER,
+    SETTINGS_DEFAULT_MODEL_PLACEHOLDER, SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
 };
 
 const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
 const LIVE_CAPTURE_MAX_EVENTS_PER_POLL: usize = 512;
+const PARAM_LEVEL_MIN: u8 = 1;
+const PARAM_LEVEL_MAX: u8 = 5;
+const PARAM_LEVEL_SPAN: u8 = PARAM_LEVEL_MAX - PARAM_LEVEL_MIN;
 type DropdownState = SelectState<Vec<&'static str>>;
 
 pub(super) struct SonantMainWindow {
@@ -58,6 +62,10 @@ pub(super) struct SonantMainWindow {
     _generation_mode_dropdown_subscription: Subscription,
     ai_model_dropdown: Entity<DropdownState>,
     _ai_model_dropdown_subscription: Subscription,
+    complexity_slider: Entity<SliderState>,
+    _complexity_slider_subscription: Subscription,
+    density_slider: Entity<SliderState>,
+    _density_slider_subscription: Subscription,
     settings_anthropic_api_key_input: Entity<InputState>,
     _settings_anthropic_api_key_subscription: Subscription,
     settings_openai_api_key_input: Entity<InputState>,
@@ -119,6 +127,24 @@ impl SonantMainWindow {
             cx.new(|cx| SelectState::new(Self::ai_model_dropdown_items(), None, window, cx));
         let ai_model_dropdown_subscription =
             cx.subscribe_in(&ai_model_dropdown, window, Self::on_ai_model_dropdown_event);
+        let complexity_slider = cx.new(|_| {
+            SliderState::new()
+                .min(PARAM_LEVEL_MIN as f32)
+                .max(PARAM_LEVEL_MAX as f32)
+                .step(1.0)
+                .default_value(DEFAULT_COMPLEXITY as f32)
+        });
+        let complexity_slider_subscription =
+            cx.subscribe_in(&complexity_slider, window, Self::on_complexity_slider_event);
+        let density_slider = cx.new(|_| {
+            SliderState::new()
+                .min(PARAM_LEVEL_MIN as f32)
+                .max(PARAM_LEVEL_MAX as f32)
+                .step(1.0)
+                .default_value(DEFAULT_DENSITY as f32)
+        });
+        let density_slider_subscription =
+            cx.subscribe_in(&density_slider, window, Self::on_density_slider_event);
         let settings_anthropic_api_key_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER)
@@ -179,6 +205,10 @@ impl SonantMainWindow {
             _generation_mode_dropdown_subscription: generation_mode_dropdown_subscription,
             ai_model_dropdown,
             _ai_model_dropdown_subscription: ai_model_dropdown_subscription,
+            complexity_slider,
+            _complexity_slider_subscription: complexity_slider_subscription,
+            density_slider,
+            _density_slider_subscription: density_slider_subscription,
             settings_anthropic_api_key_input,
             _settings_anthropic_api_key_subscription: settings_anthropic_api_key_subscription,
             settings_openai_api_key_input,
@@ -342,6 +372,36 @@ impl SonantMainWindow {
         self.settings_ui_state
             .update_draft_field(SettingsField::DefaultModel, selected);
         cx.notify();
+    }
+
+    fn on_complexity_slider_event(
+        &mut self,
+        _state: &Entity<SliderState>,
+        event: &SliderEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SliderEvent::Change(value) = event;
+        let complexity = Self::slider_value_to_param_level(*value);
+        if self.submission_model.complexity() != complexity {
+            self.submission_model.set_complexity(complexity);
+            cx.notify();
+        }
+    }
+
+    fn on_density_slider_event(
+        &mut self,
+        _state: &Entity<SliderState>,
+        event: &SliderEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SliderEvent::Change(value) = event;
+        let density = Self::slider_value_to_param_level(*value);
+        if self.submission_model.density() != density {
+            self.submission_model.set_density(density);
+            cx.notify();
+        }
     }
 
     fn on_open_settings_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -555,6 +615,70 @@ impl SonantMainWindow {
                     .cursor_pointer()
                     .hover(|style| style.text_color(colors.primary))
                     .child("ⓘ"),
+            )
+    }
+
+    fn clamp_param_level(level: u8) -> u8 {
+        level.clamp(PARAM_LEVEL_MIN, PARAM_LEVEL_MAX)
+    }
+
+    fn slider_value_to_param_level(value: SliderValue) -> u8 {
+        let raw = value.end().round() as i16;
+        let clamped = raw.clamp(PARAM_LEVEL_MIN as i16, PARAM_LEVEL_MAX as i16);
+        clamped as u8
+    }
+
+    fn param_level_to_percent(level: u8) -> u8 {
+        let level = Self::clamp_param_level(level);
+        let offset = level.saturating_sub(PARAM_LEVEL_MIN) as u16;
+        ((offset * 100) / PARAM_LEVEL_SPAN as u16) as u8
+    }
+
+    fn parameter_slider_control(
+        id: &'static str,
+        label: &'static str,
+        percent: u8,
+        min_label: &'static str,
+        max_label: &'static str,
+        slider: &Entity<SliderState>,
+        colors: ThemeColors,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_size(px(12.0)).child(label))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(colors.accent_foreground)
+                            .child(format!("{percent}%")),
+                    ),
+            )
+            .child(
+                div().py(px(2.0)).child(
+                    Slider::new(slider)
+                        .horizontal()
+                        .h(px(24.0))
+                        .bg(colors.primary)
+                        .text_color(colors.primary),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .text_size(px(10.0))
+                    .text_color(colors.muted_foreground)
+                    .child(min_label)
+                    .child(max_label),
             )
     }
 
@@ -1152,9 +1276,10 @@ impl SonantMainWindow {
 
     fn on_clear_midi_slot_clicked(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
         self.clear_midi_slot_error(slot);
-        if let Ok(_) = self
+        if self
             .load_midi_use_case
             .execute(LoadMidiCommand::ClearSlot { slot })
+            .is_ok()
         {
             cx.notify();
         }
@@ -1633,6 +1758,8 @@ impl Render for SonantMainWindow {
             self.selected_generation_mode,
             &generation_references,
         );
+        let complexity_percent = Self::param_level_to_percent(self.submission_model.complexity());
+        let density_percent = Self::param_level_to_percent(self.submission_model.density());
 
         div()
             .size_full()
@@ -2618,8 +2745,27 @@ impl Render for SonantMainWindow {
                                     .child(Self::section_label("Parameter Sliders", colors))
                                     .child(
                                         div()
-                                            .text_color(colors.muted_foreground)
-                                            .child("Placeholder: Complexity and Note Density sliders will be added in follow-up issues."),
+                                            .flex()
+                                            .flex_col()
+                                            .gap_3()
+                                            .child(Self::parameter_slider_control(
+                                                "param-slider-complexity",
+                                                "Complexity",
+                                                complexity_percent,
+                                                "Simple",
+                                                "Chaotic",
+                                                &self.complexity_slider,
+                                                colors,
+                                            ))
+                                            .child(Self::parameter_slider_control(
+                                                "param-slider-density",
+                                                "Note Density",
+                                                density_percent,
+                                                "Sparse",
+                                                "Busy",
+                                                &self.density_slider,
+                                                colors,
+                                            )),
                                     ),
                             ),
                     )
@@ -2662,14 +2808,32 @@ impl Render for SonantMainWindow {
                                             .items_center()
                                             .gap_2()
                                             .child(
-                                                Button::new("param-complexity")
-                                                    .label("Complexity: 75%")
-                                                    .disabled(true),
+                                                div()
+                                                    .id("param-complexity-value")
+                                                    .px_2()
+                                                    .py(px(4.0))
+                                                    .rounded(px(999.0))
+                                                    .border_1()
+                                                    .border_color(colors.panel_border)
+                                                    .text_size(px(11.0))
+                                                    .text_color(colors.muted_foreground)
+                                                    .child(format!(
+                                                        "Complexity: {complexity_percent}%"
+                                                    )),
                                             )
                                             .child(
-                                                Button::new("param-note-density")
-                                                    .label("Note Density: 40%")
-                                                    .disabled(true),
+                                                div()
+                                                    .id("param-note-density-value")
+                                                    .px_2()
+                                                    .py(px(4.0))
+                                                    .rounded(px(999.0))
+                                                    .border_1()
+                                                    .border_color(colors.panel_border)
+                                                    .text_size(px(11.0))
+                                                    .text_color(colors.muted_foreground)
+                                                    .child(format!(
+                                                        "Note Density: {density_percent}%"
+                                                    )),
                                             ),
                                     ),
                             )

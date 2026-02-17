@@ -268,6 +268,30 @@ mod tests {
     }
 
     #[test]
+    fn submission_model_applies_updated_density_and_complexity() {
+        let mut model = PromptSubmissionModel::new(test_model());
+        model.set_density(5);
+        model.set_complexity(4);
+
+        let request = model
+            .prepare_request(GenerationMode::Melody, "prompt".to_string(), Vec::new())
+            .expect("request should be prepared");
+
+        assert_eq!(request.params.density, 5);
+        assert_eq!(request.params.complexity, 4);
+    }
+
+    #[test]
+    fn submission_model_clamps_density_and_complexity_ranges() {
+        let mut model = PromptSubmissionModel::new(test_model());
+        model.set_density(0);
+        model.set_complexity(9);
+
+        assert_eq!(model.density(), 1);
+        assert_eq!(model.complexity(), 5);
+    }
+
+    #[test]
     fn submission_model_preserves_multiple_reference_slots_in_request() {
         let mut model = PromptSubmissionModel::new(test_model());
         let references = vec![
