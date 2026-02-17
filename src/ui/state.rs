@@ -1,4 +1,5 @@
 use super::theme::ThemeColors;
+use super::{DEFAULT_GROOVE, DEFAULT_RANDOM_SEED, DEFAULT_TEMPERATURE};
 use sonant::app::LoadMidiError;
 use sonant::domain::{GenerationMode, MidiReferenceSummary, ReferenceSlot};
 use sonant::infra::midi::MidiLoadError;
@@ -401,6 +402,23 @@ fn provider_status_from_draft(draft: &SettingsDraftState) -> ProviderStatus {
     }
 
     ProviderStatus::Connected
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CandidateParams {
+    pub(super) groove: f32,
+    pub(super) temperature: f32,
+    pub(super) random_seed: u32,
+}
+
+impl Default for CandidateParams {
+    fn default() -> Self {
+        Self {
+            groove: DEFAULT_GROOVE,
+            temperature: DEFAULT_TEMPERATURE,
+            random_seed: DEFAULT_RANDOM_SEED,
+        }
+    }
 }
 
 #[cfg(test)]

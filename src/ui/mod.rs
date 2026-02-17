@@ -28,6 +28,8 @@ const DEFAULT_TEMPERATURE: f32 = 0.7;
 const DEFAULT_TOP_P: f32 = 0.9;
 const DEFAULT_MAX_TOKENS: u16 = 512;
 const DEFAULT_VARIATION_COUNT: u8 = 1;
+const DEFAULT_GROOVE: f32 = 0.0;
+const DEFAULT_RANDOM_SEED: u32 = 0;
 
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-3-5-sonnet";
 const DEFAULT_OPENAI_COMPAT_MODEL: &str = "gpt-5.2";

@@ -12,6 +12,7 @@ use gpui_component::{
     label::Label,
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
+    slider::{Slider, SliderEvent, SliderState, SliderValue},
 };
 use sonant::{
     app::{
@@ -30,8 +31,8 @@ use sonant::{
 use super::backend::build_generation_backend;
 use super::request::PromptSubmissionModel;
 use super::state::{
-    HelperGenerationStatus, MidiSlotErrorState, SettingsDraftState, SettingsField, SettingsTab,
-    SettingsUiState, mode_reference_requirement, mode_reference_requirement_satisfied,
+    CandidateParams, HelperGenerationStatus, MidiSlotErrorState, SettingsDraftState, SettingsField,
+    SettingsTab, SettingsUiState, mode_reference_requirement, mode_reference_requirement_satisfied,
 };
 use super::theme::{SonantTheme, ThemeColors};
 use super::utils::{
@@ -39,12 +40,12 @@ use super::utils::{
     log_generation_request_submission,
 };
 use super::{
-    DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_MODEL, JOB_UPDATE_POLL_INTERVAL_MS,
-    MIDI_SLOT_DROP_ERROR_MESSAGE, MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
-    PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
-    SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER, SETTINGS_CONTEXT_WINDOW_PLACEHOLDER,
-    SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER, SETTINGS_DEFAULT_MODEL_PLACEHOLDER,
-    SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
+    DEFAULT_ANTHROPIC_MODEL, DEFAULT_GROOVE, DEFAULT_OPENAI_COMPAT_MODEL, DEFAULT_RANDOM_SEED,
+    DEFAULT_TEMPERATURE, JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE,
+    MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_ROWS,
+    PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE, SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER,
+    SETTINGS_CONTEXT_WINDOW_PLACEHOLDER, SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER,
+    SETTINGS_DEFAULT_MODEL_PLACEHOLDER, SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
 };
 
 const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
@@ -89,6 +90,11 @@ pub(super) struct SonantMainWindow {
     generation_candidates: Vec<GenerationCandidate>,
     selected_candidate_index: Option<usize>,
     hidden_candidates: std::collections::HashSet<usize>,
+    candidate_params: Vec<CandidateParams>,
+    candidate_groove_sliders: Vec<Entity<SliderState>>,
+    candidate_temperature_sliders: Vec<Entity<SliderState>>,
+    candidate_seed_sliders: Vec<Entity<SliderState>>,
+    _candidate_slider_subscriptions: Vec<Subscription>,
     validation_error: Option<String>,
     input_track_error: Option<String>,
     midi_slot_errors: Vec<MidiSlotErrorState>,
@@ -210,6 +216,11 @@ impl SonantMainWindow {
             generation_candidates: Vec::new(),
             selected_candidate_index: None,
             hidden_candidates: std::collections::HashSet::new(),
+            candidate_params: Vec::new(),
+            candidate_groove_sliders: Vec::new(),
+            candidate_temperature_sliders: Vec::new(),
+            candidate_seed_sliders: Vec::new(),
+            _candidate_slider_subscriptions: Vec::new(),
             validation_error: None,
             input_track_error: live_input_error,
             midi_slot_errors: Vec::new(),
@@ -1009,9 +1020,9 @@ impl SonantMainWindow {
         self._update_poll_task = cx.spawn_in(window, async move |view, window| {
             loop {
                 Timer::after(Duration::from_millis(JOB_UPDATE_POLL_INTERVAL_MS)).await;
-                let keep_polling = match view
-                    .update_in(window, |view, _window, cx| view.poll_generation_updates(cx))
-                {
+                let keep_polling = match view.update_in(window, |view, window, cx| {
+                    view.poll_generation_updates(window, cx)
+                }) {
                     Ok(keep_polling) => keep_polling,
                     Err(_) => break,
                 };
@@ -1160,13 +1171,18 @@ impl SonantMainWindow {
         }
     }
 
-    fn poll_generation_updates(&mut self, cx: &mut Context<Self>) -> bool {
+    fn poll_generation_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let updates = self.generation_job_manager.drain_updates();
         if !updates.is_empty() {
+            let had_success = updates
+                .iter()
+                .any(|u| u.state == GenerationJobState::Succeeded);
             for update in updates {
                 self.apply_generation_update(update);
             }
-
+            if had_success {
+                self.rebuild_candidate_sliders(window, cx);
+            }
             cx.notify();
         }
 
@@ -1204,6 +1220,93 @@ impl SonantMainWindow {
                 request_id: update.request_id,
             },
         };
+    }
+
+    fn rebuild_candidate_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.generation_candidates.len();
+        self.candidate_params = (0..count).map(|_| CandidateParams::default()).collect();
+        self._candidate_slider_subscriptions.clear();
+        self.candidate_groove_sliders.clear();
+        self.candidate_temperature_sliders.clear();
+        self.candidate_seed_sliders.clear();
+
+        for i in 0..count {
+            let groove_state = cx.new(|_| {
+                SliderState::new()
+                    .min(0.0)
+                    .max(1.0)
+                    .step(0.05)
+                    .default_value(DEFAULT_GROOVE)
+            });
+            let temperature_state = cx.new(|_| {
+                SliderState::new()
+                    .min(0.0)
+                    .max(2.0)
+                    .step(0.1)
+                    .default_value(DEFAULT_TEMPERATURE)
+            });
+            let seed_state = cx.new(|_| {
+                SliderState::new()
+                    .min(0.0)
+                    .max(9999.0)
+                    .step(1.0)
+                    .default_value(DEFAULT_RANDOM_SEED as f32)
+            });
+
+            let sub_g = cx.subscribe_in(&groove_state, window, move |this, _, event, _, cx| {
+                if let SliderEvent::Change(SliderValue::Single(v)) = event {
+                    if let Some(p) = this.candidate_params.get_mut(i) {
+                        p.groove = *v;
+                    }
+                    cx.notify();
+                }
+            });
+            let sub_t =
+                cx.subscribe_in(&temperature_state, window, move |this, _, event, _, cx| {
+                    if let SliderEvent::Change(SliderValue::Single(v)) = event {
+                        if let Some(p) = this.candidate_params.get_mut(i) {
+                            p.temperature = *v;
+                        }
+                        cx.notify();
+                    }
+                });
+            let sub_s = cx.subscribe_in(&seed_state, window, move |this, _, event, _, cx| {
+                if let SliderEvent::Change(SliderValue::Single(v)) = event {
+                    if let Some(p) = this.candidate_params.get_mut(i) {
+                        p.random_seed = *v as u32;
+                    }
+                    cx.notify();
+                }
+            });
+
+            self._candidate_slider_subscriptions
+                .extend([sub_g, sub_t, sub_s]);
+            self.candidate_groove_sliders.push(groove_state);
+            self.candidate_temperature_sliders.push(temperature_state);
+            self.candidate_seed_sliders.push(seed_state);
+        }
+    }
+
+    fn on_candidate_randomize_seed(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+            ^ (index as u32).wrapping_mul(2654435761);
+        if let Some(p) = self.candidate_params.get_mut(index) {
+            p.random_seed = seed;
+        }
+        if let Some(slider) = self.candidate_seed_sliders.get(index) {
+            slider.update(cx, |state, cx| {
+                state.set_value((seed % 10000) as f32, window, cx);
+            });
+        }
+        cx.notify();
     }
 }
 
@@ -2427,7 +2530,7 @@ impl Render for SonantMainWindow {
                                         el.child(
                                             div()
                                                 .id("candidate-list")
-                                                .h(px(128.0))
+                                                .h(px(224.0))
                                                 .overflow_y_scrollbar()
                                                 .rounded(radius.control)
                                                 .border_1()
@@ -2446,160 +2549,309 @@ impl Render for SonantMainWindow {
                                                                 Self::candidate_display_name(index);
                                                             let status_label =
                                                                 Self::candidate_status_label(index);
+                                                            let groove_val = self
+                                                                .candidate_groove_sliders
+                                                                .get(index)
+                                                                .map(|s| s.read(cx).value().start())
+                                                                .unwrap_or(DEFAULT_GROOVE);
+                                                            let temperature_val = self
+                                                                .candidate_temperature_sliders
+                                                                .get(index)
+                                                                .map(|s| s.read(cx).value().start())
+                                                                .unwrap_or(DEFAULT_TEMPERATURE);
+                                                            let seed_val = self
+                                                                .candidate_seed_sliders
+                                                                .get(index)
+                                                                .map(|s| s.read(cx).value().start() as u32)
+                                                                .unwrap_or(DEFAULT_RANDOM_SEED);
+                                                            let groove_slider = self
+                                                                .candidate_groove_sliders
+                                                                .get(index)
+                                                                .cloned();
+                                                            let temperature_slider = self
+                                                                .candidate_temperature_sliders
+                                                                .get(index)
+                                                                .cloned();
+                                                            let seed_slider = self
+                                                                .candidate_seed_sliders
+                                                                .get(index)
+                                                                .cloned();
+                                                            let has_sliders = groove_slider.is_some();
 
+                                                            let border_color = if is_selected {
+                                                                colors.success_foreground
+                                                            } else {
+                                                                gpui::transparent_black()
+                                                            };
+                                                            let row_bg = if is_selected {
+                                                                colors.success_foreground.opacity(0.08)
+                                                            } else {
+                                                                colors.panel_background
+                                                            };
+
+                                                            // Outer wrapper: horizontal (left border + content column)
                                                             div()
                                                                 .id(("candidate-row", index))
                                                                 .flex()
-                                                                .items_center()
-                                                                .h(px(32.0))
-                                                                .bg(if is_selected {
-                                                                    colors.success_foreground.opacity(0.08)
-                                                                } else {
-                                                                    colors.panel_background
-                                                                })
+                                                                .bg(row_bg)
                                                                 .hover(|s| s.bg(colors.input_background))
                                                                 .cursor_pointer()
                                                                 .on_click(cx.listener(move |this, _, _window, cx| {
                                                                     this.on_candidate_selected(index, cx);
                                                                 }))
-                                                                // Green left border (active only)
+                                                                // Full-height left border
                                                                 .child(
                                                                     div()
                                                                         .w(px(3.0))
                                                                         .h_full()
                                                                         .flex_none()
-                                                                        .bg(if is_selected {
-                                                                            colors.success_foreground
-                                                                        } else {
-                                                                            gpui::transparent_black()
-                                                                        }),
+                                                                        .bg(border_color),
                                                                 )
-                                                                // Drag handle
+                                                                // Content column
                                                                 .child(
                                                                     div()
-                                                                        .w(px(18.0))
                                                                         .flex()
-                                                                        .items_center()
-                                                                        .justify_center()
-                                                                        .flex_none()
-                                                                        .text_size(px(12.0))
-                                                                        .text_color(colors.muted_foreground)
-                                                                        .child("⠿"),
-                                                                )
-                                                                // Radio indicator
-                                                                .child(
-                                                                    div()
-                                                                        .w(px(16.0))
-                                                                        .flex()
-                                                                        .items_center()
-                                                                        .justify_center()
-                                                                        .flex_none()
-                                                                        .text_size(px(12.0))
-                                                                        .text_color(if is_selected {
-                                                                            colors.success_foreground
-                                                                        } else {
-                                                                            colors.muted_foreground
-                                                                        })
-                                                                        .child(if is_selected { "◉" } else { "◌" }),
-                                                                )
-                                                                // Pattern name + status label
-                                                                .child(
-                                                                    div()
+                                                                        .flex_col()
                                                                         .flex_1()
-                                                                        .flex()
-                                                                        .items_center()
-                                                                        .gap_2()
-                                                                        .min_w(px(0.0))
+                                                                        // Header row
                                                                         .child(
                                                                             div()
-                                                                                .text_size(px(11.0))
-                                                                                .text_color(if is_selected {
-                                                                                    colors.surface_foreground
-                                                                                } else {
-                                                                                    colors.muted_foreground
-                                                                                })
-                                                                                .font_weight(if is_selected {
-                                                                                    gpui::FontWeight::BOLD
-                                                                                } else {
-                                                                                    gpui::FontWeight::NORMAL
-                                                                                })
-                                                                                .overflow_hidden()
-                                                                                .child(display_name),
+                                                                                .flex()
+                                                                                .items_center()
+                                                                                .h(px(32.0))
+                                                                                // Drag handle
+                                                                                .child(
+                                                                                    div()
+                                                                                        .w(px(18.0))
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .justify_center()
+                                                                                        .flex_none()
+                                                                                        .text_size(px(12.0))
+                                                                                        .text_color(colors.muted_foreground)
+                                                                                        .child("⠿"),
+                                                                                )
+                                                                                // Radio indicator
+                                                                                .child(
+                                                                                    div()
+                                                                                        .w(px(16.0))
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .justify_center()
+                                                                                        .flex_none()
+                                                                                        .text_size(px(12.0))
+                                                                                        .text_color(if is_selected {
+                                                                                            colors.success_foreground
+                                                                                        } else {
+                                                                                            colors.muted_foreground
+                                                                                        })
+                                                                                        .child(if is_selected { "◉" } else { "◌" }),
+                                                                                )
+                                                                                // Pattern name + status label
+                                                                                .child(
+                                                                                    div()
+                                                                                        .flex_1()
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .gap_2()
+                                                                                        .min_w(px(0.0))
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .text_size(px(11.0))
+                                                                                                .text_color(if is_selected {
+                                                                                                    colors.surface_foreground
+                                                                                                } else {
+                                                                                                    colors.muted_foreground
+                                                                                                })
+                                                                                                .font_weight(if is_selected {
+                                                                                                    gpui::FontWeight::BOLD
+                                                                                                } else {
+                                                                                                    gpui::FontWeight::NORMAL
+                                                                                                })
+                                                                                                .overflow_hidden()
+                                                                                                .child(display_name),
+                                                                                        )
+                                                                                        .when(!status_label.is_empty(), |el| {
+                                                                                            el.child(
+                                                                                                div()
+                                                                                                    .flex_none()
+                                                                                                    .px(px(4.0))
+                                                                                                    .py(px(1.0))
+                                                                                                    .rounded(px(3.0))
+                                                                                                    .text_size(px(9.0))
+                                                                                                    .text_color(if is_selected {
+                                                                                                        colors.success_foreground
+                                                                                                    } else {
+                                                                                                        colors.muted_foreground
+                                                                                                    })
+                                                                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                                                                    .border_1()
+                                                                                                    .border_color(if is_selected {
+                                                                                                        colors.success_foreground
+                                                                                                    } else {
+                                                                                                        colors.panel_border
+                                                                                                    })
+                                                                                                    .child(status_label),
+                                                                                            )
+                                                                                        }),
+                                                                                )
+                                                                                // Action buttons
+                                                                                .child(
+                                                                                    div()
+                                                                                        .flex()
+                                                                                        .items_center()
+                                                                                        .gap_1()
+                                                                                        .pr_2()
+                                                                                        .pl_2()
+                                                                                        .h(px(24.0))
+                                                                                        .border_l_1()
+                                                                                        .border_color(colors.panel_border)
+                                                                                        // Visibility toggle
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .id(("candidate-visible", index))
+                                                                                                .w(px(20.0))
+                                                                                                .h(px(20.0))
+                                                                                                .flex()
+                                                                                                .items_center()
+                                                                                                .justify_center()
+                                                                                                .rounded(px(999.0))
+                                                                                                .text_size(px(11.0))
+                                                                                                .text_color(if is_visible {
+                                                                                                    colors.surface_foreground
+                                                                                                } else {
+                                                                                                    colors.panel_border
+                                                                                                })
+                                                                                                .cursor_pointer()
+                                                                                                .hover(|s| s.text_color(colors.surface_foreground))
+                                                                                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                                                    this.on_candidate_visibility_toggled(index, cx);
+                                                                                                }))
+                                                                                                .child(if is_visible { "◉" } else { "◌" }),
+                                                                                        )
+                                                                                        // More button
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .id(("candidate-more", index))
+                                                                                                .w(px(20.0))
+                                                                                                .h(px(20.0))
+                                                                                                .flex()
+                                                                                                .items_center()
+                                                                                                .justify_center()
+                                                                                                .rounded(px(999.0))
+                                                                                                .text_size(px(14.0))
+                                                                                                .text_color(colors.muted_foreground)
+                                                                                                .cursor_pointer()
+                                                                                                .hover(|s| s.text_color(colors.surface_foreground))
+                                                                                                .child("⋮"),
+                                                                                        ),
+                                                                                ),
                                                                         )
-                                                                        .when(!status_label.is_empty(), |el| {
+                                                                        // Sliders section
+                                                                        .when(has_sliders, |el| {
                                                                             el.child(
                                                                                 div()
-                                                                                    .flex_none()
-                                                                                    .px(px(4.0))
-                                                                                    .py(px(1.0))
-                                                                                    .rounded(px(3.0))
-                                                                                    .text_size(px(9.0))
-                                                                                    .text_color(if is_selected {
-                                                                                        colors.success_foreground
-                                                                                    } else {
-                                                                                        colors.muted_foreground
-                                                                                    })
-                                                                                    .font_weight(gpui::FontWeight::BOLD)
-                                                                                    .border_1()
-                                                                                    .border_color(if is_selected {
-                                                                                        colors.success_foreground
-                                                                                    } else {
-                                                                                        colors.panel_border
-                                                                                    })
-                                                                                    .child(status_label),
+                                                                                    .flex()
+                                                                                    .flex_col()
+                                                                                    .gap_1()
+                                                                                    .px_2()
+                                                                                    .pb_1()
+                                                                                    // Groove slider row
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .flex()
+                                                                                            .items_center()
+                                                                                            .gap_2()
+                                                                                            .h(px(20.0))
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .w(px(72.0))
+                                                                                                    .text_size(px(10.0))
+                                                                                                    .text_color(colors.muted_foreground)
+                                                                                                    .child("Groove"),
+                                                                                            )
+                                                                                            .child(
+                                                                                                Slider::new(groove_slider.as_ref().unwrap()).horizontal()
+                                                                                            )
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .w(px(28.0))
+                                                                                                    .text_size(px(10.0))
+                                                                                                    .text_color(colors.muted_foreground)
+                                                                                                    .child(format!("{:.1}", groove_val)),
+                                                                                            ),
+                                                                                    )
+                                                                                    // Temperature slider row
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .flex()
+                                                                                            .items_center()
+                                                                                            .gap_2()
+                                                                                            .h(px(20.0))
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .w(px(72.0))
+                                                                                                    .text_size(px(10.0))
+                                                                                                    .text_color(colors.muted_foreground)
+                                                                                                    .child("Temperature"),
+                                                                                            )
+                                                                                            .child(
+                                                                                                Slider::new(temperature_slider.as_ref().unwrap()).horizontal()
+                                                                                            )
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .w(px(28.0))
+                                                                                                    .text_size(px(10.0))
+                                                                                                    .text_color(colors.muted_foreground)
+                                                                                                    .child(format!("{:.1}", temperature_val)),
+                                                                                            ),
+                                                                                    )
+                                                                                    // Seed slider row with dice button
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .flex()
+                                                                                            .items_center()
+                                                                                            .gap_2()
+                                                                                            .h(px(20.0))
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .w(px(72.0))
+                                                                                                    .text_size(px(10.0))
+                                                                                                    .text_color(colors.muted_foreground)
+                                                                                                    .child("Seed"),
+                                                                                            )
+                                                                                            .child(
+                                                                                                Slider::new(seed_slider.as_ref().unwrap()).horizontal()
+                                                                                            )
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .w(px(28.0))
+                                                                                                    .text_size(px(10.0))
+                                                                                                    .text_color(colors.muted_foreground)
+                                                                                                    .child(format!("{}", seed_val)),
+                                                                                            )
+                                                                                            // Dice button
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .id(("candidate-dice", index))
+                                                                                                    .w(px(20.0))
+                                                                                                    .h(px(20.0))
+                                                                                                    .flex()
+                                                                                                    .items_center()
+                                                                                                    .justify_center()
+                                                                                                    .rounded(px(999.0))
+                                                                                                    .text_size(px(12.0))
+                                                                                                    .text_color(colors.muted_foreground)
+                                                                                                    .cursor_pointer()
+                                                                                                    .hover(|s| s.text_color(colors.surface_foreground))
+                                                                                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                                                                                        this.on_candidate_randomize_seed(index, window, cx);
+                                                                                                    }))
+                                                                                                    .child("⚄"),
+                                                                                            ),
+                                                                                    ),
                                                                             )
                                                                         }),
-                                                                )
-                                                                // Action buttons
-                                                                .child(
-                                                                    div()
-                                                                        .flex()
-                                                                        .items_center()
-                                                                        .gap_1()
-                                                                        .pr_2()
-                                                                        .pl_2()
-                                                                        .h(px(24.0))
-                                                                        .border_l_1()
-                                                                        .border_color(colors.panel_border)
-                                                                        // Visibility toggle
-                                                                        .child(
-                                                                            div()
-                                                                                .id(("candidate-visible", index))
-                                                                                .w(px(20.0))
-                                                                                .h(px(20.0))
-                                                                                .flex()
-                                                                                .items_center()
-                                                                                .justify_center()
-                                                                                .rounded(px(999.0))
-                                                                                .text_size(px(11.0))
-                                                                                .text_color(if is_visible {
-                                                                                    colors.surface_foreground
-                                                                                } else {
-                                                                                    colors.panel_border
-                                                                                })
-                                                                                .cursor_pointer()
-                                                                                .hover(|s| s.text_color(colors.surface_foreground))
-                                                                                .on_click(cx.listener(move |this, _, _window, cx| {
-                                                                                    this.on_candidate_visibility_toggled(index, cx);
-                                                                                }))
-                                                                                .child(if is_visible { "◉" } else { "◌" }),
-                                                                        )
-                                                                        // More button
-                                                                        .child(
-                                                                            div()
-                                                                                .id(("candidate-more", index))
-                                                                                .w(px(20.0))
-                                                                                .h(px(20.0))
-                                                                                .flex()
-                                                                                .items_center()
-                                                                                .justify_center()
-                                                                                .rounded(px(999.0))
-                                                                                .text_size(px(14.0))
-                                                                                .text_color(colors.muted_foreground)
-                                                                                .cursor_pointer()
-                                                                                .hover(|s| s.text_color(colors.surface_foreground))
-                                                                                .child("⋮"),
-                                                                        ),
                                                                 )
                                                         }),
                                                 ),
