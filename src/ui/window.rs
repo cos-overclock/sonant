@@ -11,6 +11,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     label::Label,
     scroll::ScrollableElement,
+    select::{Select, SelectEvent, SelectState},
 };
 use sonant::{
     app::{
@@ -49,10 +50,17 @@ use super::{
 
 const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
 const LIVE_CAPTURE_MAX_EVENTS_PER_POLL: usize = 512;
+type DropdownState = SelectState<Vec<&'static str>>;
 
 pub(super) struct SonantMainWindow {
     prompt_input: Entity<InputState>,
     _prompt_input_subscription: Subscription,
+    generation_mode_dropdown: Entity<DropdownState>,
+    _generation_mode_dropdown_subscription: Subscription,
+    reference_slot_dropdown: Entity<DropdownState>,
+    _reference_slot_dropdown_subscription: Subscription,
+    reference_source_dropdown: Entity<DropdownState>,
+    _reference_source_dropdown_subscription: Subscription,
     api_key_input: Entity<InputState>,
     _api_key_input_subscription: Subscription,
     settings_anthropic_api_key_input: Entity<InputState>,
@@ -100,6 +108,27 @@ impl SonantMainWindow {
         });
         let prompt_input_subscription =
             cx.subscribe_in(&prompt_input, window, Self::on_prompt_input_event);
+        let generation_mode_dropdown =
+            cx.new(|cx| SelectState::new(Self::generation_mode_dropdown_items(), None, window, cx));
+        let generation_mode_dropdown_subscription = cx.subscribe_in(
+            &generation_mode_dropdown,
+            window,
+            Self::on_generation_mode_dropdown_event,
+        );
+        let reference_slot_dropdown =
+            cx.new(|cx| SelectState::new(Self::reference_slot_dropdown_items(), None, window, cx));
+        let reference_slot_dropdown_subscription = cx.subscribe_in(
+            &reference_slot_dropdown,
+            window,
+            Self::on_reference_slot_dropdown_event,
+        );
+        let reference_source_dropdown = cx
+            .new(|cx| SelectState::new(Self::reference_source_dropdown_items(), None, window, cx));
+        let reference_source_dropdown_subscription = cx.subscribe_in(
+            &reference_source_dropdown,
+            window,
+            Self::on_reference_source_dropdown_event,
+        );
         let api_key_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(API_KEY_PLACEHOLDER)
@@ -163,6 +192,12 @@ impl SonantMainWindow {
         let mut this = Self {
             prompt_input,
             _prompt_input_subscription: prompt_input_subscription,
+            generation_mode_dropdown,
+            _generation_mode_dropdown_subscription: generation_mode_dropdown_subscription,
+            reference_slot_dropdown,
+            _reference_slot_dropdown_subscription: reference_slot_dropdown_subscription,
+            reference_source_dropdown,
+            _reference_source_dropdown_subscription: reference_source_dropdown_subscription,
             api_key_input,
             _api_key_input_subscription: api_key_input_subscription,
             settings_anthropic_api_key_input,
@@ -202,6 +237,7 @@ impl SonantMainWindow {
         if let Err(error) = this.sync_midi_input_router_config() {
             this.input_track_error = Some(error);
         }
+        this.sync_dropdowns(window, cx);
         this.sync_settings_inputs_from_draft(window, cx);
         this.start_live_capture_polling(window, cx);
         this
@@ -244,6 +280,140 @@ impl SonantMainWindow {
         {
             cx.notify();
         }
+    }
+
+    fn generation_mode_dropdown_items() -> Vec<&'static str> {
+        vec![
+            Self::generation_mode_label(GenerationMode::Melody),
+            Self::generation_mode_label(GenerationMode::ChordProgression),
+            Self::generation_mode_label(GenerationMode::DrumPattern),
+            Self::generation_mode_label(GenerationMode::Bassline),
+            Self::generation_mode_label(GenerationMode::CounterMelody),
+            Self::generation_mode_label(GenerationMode::Harmony),
+            Self::generation_mode_label(GenerationMode::Continuation),
+        ]
+    }
+
+    fn reference_slot_dropdown_items() -> Vec<&'static str> {
+        Self::reference_slots()
+            .iter()
+            .copied()
+            .map(Self::reference_slot_label)
+            .collect()
+    }
+
+    fn reference_source_dropdown_items() -> Vec<&'static str> {
+        vec![
+            Self::reference_source_label(ReferenceSource::File),
+            Self::reference_source_label(ReferenceSource::Live),
+        ]
+    }
+
+    fn generation_mode_from_label(label: &str) -> Option<GenerationMode> {
+        match label {
+            "Melody" => Some(GenerationMode::Melody),
+            "Chord Progression" => Some(GenerationMode::ChordProgression),
+            "Drum Pattern" => Some(GenerationMode::DrumPattern),
+            "Bassline" => Some(GenerationMode::Bassline),
+            "Counter Melody" => Some(GenerationMode::CounterMelody),
+            "Harmony" => Some(GenerationMode::Harmony),
+            "Continuation" => Some(GenerationMode::Continuation),
+            _ => None,
+        }
+    }
+
+    fn reference_slot_from_label(label: &str) -> Option<ReferenceSlot> {
+        match label {
+            "Melody" => Some(ReferenceSlot::Melody),
+            "Chord Progression" => Some(ReferenceSlot::ChordProgression),
+            "Drum Pattern" => Some(ReferenceSlot::DrumPattern),
+            "Bassline" => Some(ReferenceSlot::Bassline),
+            "Counter Melody" => Some(ReferenceSlot::CounterMelody),
+            "Harmony" => Some(ReferenceSlot::Harmony),
+            "Continuation Seed" => Some(ReferenceSlot::ContinuationSeed),
+            _ => None,
+        }
+    }
+
+    fn reference_source_from_label(label: &str) -> Option<ReferenceSource> {
+        match label {
+            "File" => Some(ReferenceSource::File),
+            "Live" => Some(ReferenceSource::Live),
+            _ => None,
+        }
+    }
+
+    fn sync_dropdowns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mode_label = Self::generation_mode_label(self.selected_generation_mode);
+        self.generation_mode_dropdown.update(cx, |state, cx| {
+            state.set_selected_value(&mode_label, window, cx);
+        });
+
+        let slot_label = Self::reference_slot_label(self.selected_reference_slot);
+        self.reference_slot_dropdown.update(cx, |state, cx| {
+            state.set_selected_value(&slot_label, window, cx);
+        });
+
+        let source_label =
+            Self::reference_source_label(self.source_for_slot(self.selected_reference_slot));
+        self.reference_source_dropdown.update(cx, |state, cx| {
+            state.set_selected_value(&source_label, window, cx);
+        });
+    }
+
+    fn on_generation_mode_dropdown_event(
+        &mut self,
+        _state: &Entity<DropdownState>,
+        event: &SelectEvent<Vec<&'static str>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(selected_label) = event;
+        let Some(selected_label) = selected_label.as_deref() else {
+            return;
+        };
+        let Some(mode) = Self::generation_mode_from_label(selected_label) else {
+            return;
+        };
+        self.on_generation_mode_selected(mode, cx);
+    }
+
+    fn on_reference_slot_dropdown_event(
+        &mut self,
+        _state: &Entity<DropdownState>,
+        event: &SelectEvent<Vec<&'static str>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(selected_label) = event;
+        let Some(selected_label) = selected_label.as_deref() else {
+            return;
+        };
+        let Some(slot) = Self::reference_slot_from_label(selected_label) else {
+            return;
+        };
+
+        self.on_reference_slot_selected(slot, cx);
+        self.sync_dropdowns(window, cx);
+    }
+
+    fn on_reference_source_dropdown_event(
+        &mut self,
+        _state: &Entity<DropdownState>,
+        event: &SelectEvent<Vec<&'static str>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(selected_label) = event;
+        let Some(selected_label) = selected_label.as_deref() else {
+            return;
+        };
+        let Some(source) = Self::reference_source_from_label(selected_label) else {
+            return;
+        };
+
+        self.on_reference_source_selected(self.selected_reference_slot, source, cx);
+        self.sync_dropdowns(window, cx);
     }
 
     fn on_open_settings_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -482,18 +652,6 @@ impl SonantMainWindow {
         }
     }
 
-    fn reference_slot_button_id(slot: ReferenceSlot) -> &'static str {
-        match slot {
-            ReferenceSlot::Melody => "reference-slot-melody",
-            ReferenceSlot::ChordProgression => "reference-slot-chord-progression",
-            ReferenceSlot::DrumPattern => "reference-slot-drum-pattern",
-            ReferenceSlot::Bassline => "reference-slot-bassline",
-            ReferenceSlot::CounterMelody => "reference-slot-counter-melody",
-            ReferenceSlot::Harmony => "reference-slot-harmony",
-            ReferenceSlot::ContinuationSeed => "reference-slot-continuation-seed",
-        }
-    }
-
     fn reference_source_label(source: ReferenceSource) -> &'static str {
         match source {
             ReferenceSource::File => "File",
@@ -511,23 +669,6 @@ impl SonantMainWindow {
             ReferenceSlot::Harmony => 5,
             ReferenceSlot::ContinuationSeed => 6,
         }
-    }
-
-    fn reference_source_index(source: ReferenceSource) -> usize {
-        match source {
-            ReferenceSource::File => 0,
-            ReferenceSource::Live => 1,
-        }
-    }
-
-    fn input_track_source_button_id(
-        slot: ReferenceSlot,
-        source: ReferenceSource,
-    ) -> (&'static str, usize) {
-        (
-            "input-track-source",
-            Self::reference_slot_index(slot) * 2 + Self::reference_source_index(source),
-        )
     }
 
     fn input_track_channel_button_id(slot: ReferenceSlot, channel: u8) -> (&'static str, usize) {
@@ -1473,42 +1614,6 @@ impl Render for SonantMainWindow {
         let selected_slot_reference_count = selected_slot_references.len();
         let selected_slot_set = selected_slot_reference_count > 0;
         let selected_slot_error = self.midi_slot_error_for_slot(selected_slot).cloned();
-        let mode_button = |id: &'static str, mode: GenerationMode| {
-            let button = Button::new(id)
-                .label(Self::generation_mode_label(mode))
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.on_generation_mode_selected(mode, cx)
-                }));
-            if self.selected_generation_mode == mode {
-                button.primary()
-            } else {
-                button
-            }
-        };
-        let slot_button = |slot: ReferenceSlot| {
-            let button = Button::new(Self::reference_slot_button_id(slot))
-                .label(Self::reference_slot_label(slot))
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.on_reference_slot_selected(slot, cx)
-                }));
-            if selected_slot == slot {
-                button.primary()
-            } else {
-                button
-            }
-        };
-        let source_button = |source: ReferenceSource, label: &'static str| {
-            let button = Button::new(Self::input_track_source_button_id(selected_slot, source))
-                .label(label)
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.on_reference_source_selected(selected_slot, source, cx)
-                }));
-            if selected_reference_source == source {
-                button.primary()
-            } else {
-                button
-            }
-        };
 
         div()
             .size_full()
@@ -1529,8 +1634,6 @@ impl Render for SonantMainWindow {
                     .gap(spacing.section_gap)
                     .p(spacing.panel_padding)
                     .rounded(radius.panel)
-                    .border_1()
-                    .border_color(colors.panel_border)
                     .bg(colors.panel_background)
                     .child(
                         div()
@@ -1599,7 +1702,7 @@ impl Render for SonantMainWindow {
                     .child(
                         div()
                             .id("left_sidebar")
-                            .w(px(360.0))
+                            .w(px(420.0))
                             .flex_none()
                             .flex()
                             .flex_col()
@@ -1608,6 +1711,7 @@ impl Render for SonantMainWindow {
                             .child(
                                 div()
                                     .id("prompt_mode_model_panel")
+                                    .w_full()
                                     .flex()
                                     .flex_col()
                                     .gap_2()
@@ -1622,12 +1726,22 @@ impl Render for SonantMainWindow {
                                             .text_color(colors.muted_foreground)
                                             .child("Prompt drives `on_generate_clicked` with the selected mode and collected references."),
                                     )
-                                    .child(Input::new(&self.prompt_input).h(px(PROMPT_EDITOR_HEIGHT_PX)))
+                                    .child(
+                                        Input::new(&self.prompt_input)
+                                            .w_full()
+                                            .h(px(PROMPT_EDITOR_HEIGHT_PX)),
+                                    )
                                     .children(self.validation_error.iter().map(|message| {
                                         div()
                                             .text_color(colors.error_foreground)
                                             .child(format!("Validation: {message}"))
                                     }))
+                                    .child(Label::new("Generation Mode"))
+                                    .child(
+                                        Select::new(&self.generation_mode_dropdown)
+                                            .w_full()
+                                            .placeholder("Select generation mode"),
+                                    )
                                     .child(
                                         div()
                                             .text_color(colors.accent_foreground)
@@ -1658,45 +1772,11 @@ impl Render for SonantMainWindow {
                                     )
                                     .child(
                                         div()
-                                            .flex()
-                                            .flex_wrap()
-                                            .gap_1()
-                                            .child(mode_button(
-                                                "generation-mode-melody",
-                                                GenerationMode::Melody,
-                                            ))
-                                            .child(mode_button(
-                                                "generation-mode-chord-progression",
-                                                GenerationMode::ChordProgression,
-                                            ))
-                                            .child(mode_button(
-                                                "generation-mode-drum-pattern",
-                                                GenerationMode::DrumPattern,
-                                            ))
-                                            .child(mode_button(
-                                                "generation-mode-bassline",
-                                                GenerationMode::Bassline,
-                                            ))
-                                            .child(mode_button(
-                                                "generation-mode-counter-melody",
-                                                GenerationMode::CounterMelody,
-                                            ))
-                                            .child(mode_button(
-                                                "generation-mode-harmony",
-                                                GenerationMode::Harmony,
-                                            ))
-                                            .child(mode_button(
-                                                "generation-mode-continuation",
-                                                GenerationMode::Continuation,
-                                            )),
-                                    )
-                                    .child(
-                                        div()
                                             .text_color(colors.accent_foreground)
                                             .child(format!("AI Model: {saved_default_model}")),
                                     )
                                     .child(Label::new("API Key (testing)"))
-                                    .child(Input::new(&self.api_key_input).mask_toggle())
+                                    .child(Input::new(&self.api_key_input).w_full().mask_toggle())
                                     .children(self.api_key_error.iter().map(|message| {
                                         div()
                                             .text_color(colors.error_foreground)
@@ -1706,6 +1786,7 @@ impl Render for SonantMainWindow {
                             .child(
                                 div()
                                     .id("input_tracks_panel")
+                                    .w_full()
                                     .flex()
                                     .flex_col()
                                     .gap_2()
@@ -1720,35 +1801,27 @@ impl Render for SonantMainWindow {
                                             .text_color(colors.muted_foreground)
                                             .child("Select a slot, configure source/channel, and register references."),
                                     )
+                                    .child(Label::new("Reference Slot"))
                                     .child(
-                                        div()
-                                            .flex()
-                                            .flex_wrap()
-                                            .gap_1()
-                                            .children(
-                                                Self::reference_slots()
-                                                    .iter()
-                                                    .copied()
-                                                    .map(slot_button),
-                                            ),
+                                        Select::new(&self.reference_slot_dropdown)
+                                            .w_full()
+                                            .placeholder("Select reference slot"),
                                     )
                                     .child(
                                         div()
                                             .text_color(colors.accent_foreground)
                                             .child(format!("Selected Slot: {selected_reference_slot_label}")),
                                     )
+                                    .child(Label::new("Source"))
+                                    .child(
+                                        Select::new(&self.reference_source_dropdown)
+                                            .w_full()
+                                            .placeholder("Select source"),
+                                    )
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(source_button(ReferenceSource::File, "File"))
-                                            .child(source_button(ReferenceSource::Live, "Live"))
-                                            .child(
-                                                div()
-                                                    .text_color(colors.muted_foreground)
-                                                    .child(format!("Source: {selected_reference_source_label}")),
-                                            ),
+                                            .text_color(colors.muted_foreground)
+                                            .child(format!("Source: {selected_reference_source_label}")),
                                     )
                                     .children(
                                         std::iter::once(selected_reference_source)
