@@ -41,11 +41,11 @@ use super::utils::{
 };
 use super::{
     API_KEY_PLACEHOLDER, JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE,
-    MIDI_SLOT_DROP_HINT, MIDI_SLOT_EMPTY_LABEL, MIDI_SLOT_FILE_PICKER_PROMPT,
-    MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_HEIGHT_PX, PROMPT_EDITOR_ROWS,
-    PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE, SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER,
-    SETTINGS_CONTEXT_WINDOW_PLACEHOLDER, SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER,
-    SETTINGS_DEFAULT_MODEL_PLACEHOLDER, SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
+    MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_HEIGHT_PX,
+    PROMPT_EDITOR_ROWS, PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
+    SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER, SETTINGS_CONTEXT_WINDOW_PLACEHOLDER,
+    SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER, SETTINGS_DEFAULT_MODEL_PLACEHOLDER,
+    SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
 };
 
 const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
@@ -944,6 +944,7 @@ impl SonantMainWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn live_recording_summary_for_slot(&self, slot: ReferenceSlot) -> LiveRecordingSummary {
         let events = self.midi_input_router.snapshot_reference(slot);
         let metrics = self.midi_input_router.reference_metrics(slot);
@@ -1448,16 +1449,7 @@ impl Render for SonantMainWindow {
                         .items_center()
                         .justify_between()
                         .gap_2()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(Label::new("Settings"))
-                                .child(div().text_color(colors.muted_foreground).child(
-                                    "FR-09 foundation: screen transitions and draft diff state.",
-                                )),
-                        )
+                        .child(Label::new("Settings"))
                         .child(Button::new("close-settings-button").label("Back").on_click(
                             cx.listener(|this, _, _window, cx| this.on_close_settings_clicked(cx)),
                         )),
@@ -1521,15 +1513,7 @@ impl Render for SonantMainWindow {
                         .border_1()
                         .border_color(colors.panel_border)
                         .bg(colors.panel_background)
-                        .child(Label::new("MIDI Settings"))
-                        .child(
-                            div()
-                                .text_color(colors.muted_foreground)
-                                .child("MIDI settings UI will be added in FR-09 follow-up issues."),
-                        )
-                        .child(div().text_color(colors.muted_foreground).child(
-                            "Current issue focuses on state transitions and dirty tracking.",
-                        )),
+                        .child(Label::new("MIDI Settings")),
                     SettingsTab::General => div()
                         .id("settings-tab-general-panel")
                         .flex()
@@ -1602,15 +1586,10 @@ impl Render for SonantMainWindow {
         let status_label = self.generation_status.label();
         let status_color = self.generation_status.color(colors);
         let generating = self.generation_status.is_submitting_or_running();
-        let selected_mode_label = Self::generation_mode_label(self.selected_generation_mode);
         let selected_slot = self.selected_reference_slot;
-        let selected_reference_slot_label = Self::reference_slot_label(selected_slot);
         let selected_reference_source = self.source_for_slot(selected_slot);
-        let selected_reference_source_label =
-            Self::reference_source_label(selected_reference_source);
         let selected_live_channel = self.channel_mapping_for_slot(selected_slot);
         let selected_slot_accepts_file_drop = selected_reference_source == ReferenceSource::File;
-        let selected_live_recording_summary = self.live_recording_summary_for_slot(selected_slot);
         let file_references = self.load_midi_use_case.snapshot_references();
         let generation_references = self.collect_generation_references();
         let live_channel_mappings = self.input_track_model.live_channel_mappings();
@@ -1665,18 +1644,7 @@ impl Render for SonantMainWindow {
                                     .justify_center()
                                     .child("S"),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(Label::new("Sonant"))
-                                    .child(
-                                        div()
-                                            .text_color(colors.muted_foreground)
-                                            .child("FR-09 Main Interface"),
-                                    ),
-                            ),
+                            .child(Label::new("Sonant")),
                     )
                     .child(
                         div()
@@ -1718,26 +1686,17 @@ impl Render for SonantMainWindow {
                             .flex_none()
                             .flex()
                             .flex_col()
-                            .gap(spacing.section_gap)
+                            .p(spacing.panel_padding)
+                            .gap(spacing.panel_padding)
                             .overflow_y_scrollbar()
                             .child(
                                 div()
-                                    .id("prompt-mode-model-panel")
+                                    .id("prompt-section")
                                     .w_full()
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .p(spacing.panel_padding)
-                                    .rounded(radius.panel)
-                                    .border_1()
-                                    .border_color(colors.panel_border)
-                                    .bg(colors.panel_background)
-                                    .child(Label::new("Prompt / Mode / Model"))
-                                    .child(
-                                        div()
-                                            .text_color(colors.muted_foreground)
-                                            .child("Prompt drives `on_generate_clicked` with the selected mode and collected references."),
-                                    )
+                                    .child(Label::new("Prompt"))
                                     .child(
                                         div().w_full().h(px(PROMPT_EDITOR_HEIGHT_PX)).child(
                                             Input::new(&self.prompt_input),
@@ -1747,23 +1706,24 @@ impl Render for SonantMainWindow {
                                         div()
                                             .text_color(colors.error_foreground)
                                             .child(format!("Validation: {message}"))
-                                    }))
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("generation-mode-section")
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .pt(spacing.panel_padding)
+                                    .border_t_1()
+                                    .border_color(colors.panel_border)
                                     .child(Label::new("Generation Mode"))
                                     .child(
                                         div().w_full().h(px(36.0)).child(
                                             Select::new(&self.generation_mode_dropdown)
                                                 .placeholder("Select generation mode"),
                                         ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(colors.accent_foreground)
-                                            .child(format!("Selected Mode: {selected_mode_label}")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(colors.muted_foreground)
-                                            .child(format!("Requirement: {}", mode_requirement.description)),
                                     )
                                     .children(
                                         std::iter::once(mode_requirement_satisfied)
@@ -1782,11 +1742,23 @@ impl Render for SonantMainWindow {
                                             .map(|message| {
                                                 div().text_color(colors.error_foreground).child(*message)
                                             }),
-                                    )
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("ai-model-section")
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .pt(spacing.panel_padding)
+                                    .border_t_1()
+                                    .border_color(colors.panel_border)
+                                    .child(Label::new("AI Model"))
                                     .child(
                                         div()
                                             .text_color(colors.accent_foreground)
-                                            .child(format!("AI Model: {saved_default_model}")),
+                                            .child(format!("{saved_default_model}")),
                                     )
                                     .child(Label::new("API Key (testing)"))
                                     .child(
@@ -1802,22 +1774,15 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .id("input-tracks-panel")
+                                    .id("input-tracks-section")
                                     .w_full()
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .p(spacing.panel_padding)
-                                    .rounded(radius.panel)
-                                    .border_1()
+                                    .pt(spacing.panel_padding)
+                                    .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .bg(colors.panel_background)
                                     .child(Label::new("Input Tracks"))
-                                    .child(
-                                        div()
-                                            .text_color(colors.muted_foreground)
-                                            .child("Select a slot, configure source/channel, and register references."),
-                                    )
                                     .child(Label::new("Reference Slot"))
                                     .child(
                                         div().w_full().h(px(36.0)).child(
@@ -1825,22 +1790,12 @@ impl Render for SonantMainWindow {
                                                 .placeholder("Select reference slot"),
                                         ),
                                     )
-                                    .child(
-                                        div()
-                                            .text_color(colors.accent_foreground)
-                                            .child(format!("Selected Slot: {selected_reference_slot_label}")),
-                                    )
                                     .child(Label::new("Source"))
                                     .child(
                                         div().w_full().h(px(36.0)).child(
                                             Select::new(&self.reference_source_dropdown)
                                                 .placeholder("Select source"),
                                         ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(colors.muted_foreground)
-                                            .child(format!("Source: {selected_reference_source_label}")),
                                     )
                                     .children(
                                         std::iter::once(selected_reference_source)
@@ -1889,49 +1844,9 @@ impl Render for SonantMainWindow {
                                                     .flex()
                                                     .flex_col()
                                                     .gap_1()
-                                                    .child(
-                                                        div()
-                                                            .text_color(colors.accent_foreground)
-                                                            .child(format!(
-                                                                "Live Channel: {}",
-                                                                selected_live_channel
-                                                                    .map(|channel| channel.to_string())
-                                                                    .unwrap_or_else(|| "Not set".to_string())
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_color(colors.accent_foreground)
-                                                            .child(format!(
-                                                                "Recorded Bars: {} / Notes: {} / Events: {}",
-                                                                selected_live_recording_summary.bar_count,
-                                                                selected_live_recording_summary.note_count,
-                                                                selected_live_recording_summary.event_count
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_color(colors.muted_foreground)
-                                                            .child(format!(
-                                                                "Pitch Range: {}",
-                                                                match (
-                                                                    selected_live_recording_summary.min_pitch,
-                                                                    selected_live_recording_summary.max_pitch,
-                                                                ) {
-                                                                    (Some(min), Some(max)) => {
-                                                                        format!("{min}..{max}")
-                                                                    }
-                                                                    _ => "N/A".to_string(),
-                                                                }
-                                                            )),
-                                                    )
                                                     .child(live_channel_button_row(1, 8))
                                                     .child(live_channel_button_row(9, 16))
-                                                    .child(
-                                                        div()
-                                                            .text_color(colors.muted_foreground)
-                                                            .child("`*` indicates a channel already assigned to another Live slot."),
-                                                    )
+                                                    .child("* Channels marked with * are already assigned to another slot")
                                             }),
                                     )
                                     .child(
@@ -1971,41 +1886,13 @@ impl Render for SonantMainWindow {
                                                     this.on_midi_slot_drop(paths, cx)
                                                 },
                                             ))
-                                            .child(if selected_slot_accepts_file_drop {
-                                                div().child(format!(
-                                                    "{MIDI_SLOT_DROP_HINT} Target: {selected_reference_slot_label}"
-                                                ))
-                                            } else {
-                                                div().child(format!(
-                                                    "{selected_reference_slot_label} is using Live input. Switch source to File to load MIDI files."
-                                                ))
-                                            })
-                                            .child(div().child(format!(
-                                                "Registered File MIDI: {selected_slot_reference_count}"
-                                            )))
-                                            .children(
-                                                std::iter::once((
-                                                    selected_slot_reference_count,
-                                                    selected_reference_source,
-                                                ))
-                                                .filter(|(count, source)| {
-                                                    *count == 0 && *source == ReferenceSource::File
-                                                })
-                                                .map(|_| {
-                                                    div().text_color(colors.muted_foreground).child(format!(
-                                                        "File: {MIDI_SLOT_EMPTY_LABEL}"
-                                                    ))
-                                                }),
-                                            )
                                             .children(selected_slot_references.iter().enumerate().map(
                                                 |(index, reference)| {
                                                     let slot_file_path = reference
                                                         .file
                                                         .as_ref()
                                                         .map(|file| file.path.clone())
-                                                        .unwrap_or_else(|| {
-                                                            MIDI_SLOT_EMPTY_LABEL.to_string()
-                                                        });
+                                                        .unwrap_or_else(|| "Not set".to_string());
                                                     let slot_file_label =
                                                         display_file_name_from_path(&slot_file_path);
                                                     let slot_stats = format!(
@@ -2184,21 +2071,14 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .id("generated-patterns-panel")
+                                    .id("generated-patterns-section")
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .p(spacing.panel_padding)
-                                    .rounded(radius.panel)
-                                    .border_1()
+                                    .pt(spacing.panel_padding)
+                                    .border_t_1()
                                     .border_color(colors.panel_border)
-                                    .bg(colors.panel_background)
                                     .child(Label::new("Generated Patterns"))
-                                    .child(
-                                        div()
-                                            .text_color(colors.warning_foreground)
-                                            .child("Placeholder: candidate list / drag-to-DAW will be added in follow-up issues."),
-                                    )
                                     .child(
                                         Button::new("generated-pattern-active")
                                             .label("Pattern 1 (placeholder)")
@@ -2213,11 +2093,22 @@ impl Render for SonantMainWindow {
                                         Button::new("generated-pattern-variation-b")
                                             .label("Pattern 3 (placeholder)")
                                             .disabled(true),
-                                    )
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("parameter-sliders-section")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .pt(spacing.panel_padding)
+                                    .border_t_1()
+                                    .border_color(colors.panel_border)
+                                    .child(Label::new("Parameter Sliders"))
                                     .child(
                                         div()
                                             .text_color(colors.muted_foreground)
-                                            .child("Unimplemented actions are intentionally disabled."),
+                                            .child("Placeholder: Complexity and Note Density sliders will be added in follow-up issues."),
                                     ),
                             ),
                     )
@@ -2241,11 +2132,6 @@ impl Render for SonantMainWindow {
                                     .border_color(colors.panel_border)
                                     .bg(colors.panel_background)
                                     .child(Label::new("Params"))
-                                    .child(
-                                        div()
-                                            .text_color(colors.warning_foreground)
-                                            .child("Placeholder: Key / Scale / BPM / Complexity / Note Density are not editable yet."),
-                                    )
                                     .child(
                                         div()
                                             .flex()
@@ -2290,11 +2176,6 @@ impl Render for SonantMainWindow {
                                     .border_color(colors.panel_border)
                                     .bg(colors.panel_background)
                                     .child(Label::new("Piano Roll"))
-                                    .child(
-                                        div()
-                                            .text_color(colors.warning_foreground)
-                                            .child("Placeholder: generated MIDI preview and playhead overlay will be implemented in follow-up issues."),
-                                    )
                                     .child(
                                         div()
                                             .flex_1()
