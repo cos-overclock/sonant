@@ -237,6 +237,29 @@ impl SettingsUiState {
         self.settings_dirty = self.saved != self.draft;
     }
 
+    pub(super) fn update_draft_field(
+        &mut self,
+        field: SettingsField,
+        value: impl Into<String>,
+    ) -> bool {
+        let value = value.into();
+        let target = match field {
+            SettingsField::AnthropicApiKey => &mut self.draft.anthropic_api_key,
+            SettingsField::OpenAiApiKey => &mut self.draft.openai_api_key,
+            SettingsField::CustomBaseUrl => &mut self.draft.custom_base_url,
+            SettingsField::DefaultModel => &mut self.draft.default_model,
+            SettingsField::ContextWindow => &mut self.draft.context_window,
+        };
+
+        if *target == value {
+            return false;
+        }
+
+        *target = value;
+        self.settings_dirty = self.saved != self.draft;
+        true
+    }
+
     pub(super) fn draft_provider_status(&self) -> ProviderStatus {
         provider_status_from_draft(&self.draft)
     }
@@ -416,6 +439,21 @@ mod tests {
         assert!(state.is_field_dirty(SettingsField::ContextWindow));
         assert!(!state.is_field_dirty(SettingsField::AnthropicApiKey));
         assert_eq!(state.dirty_fields().len(), 2);
+    }
+
+    #[test]
+    fn update_draft_field_updates_only_target_field() {
+        let mut state = SettingsUiState::new(SettingsDraftState::default());
+        assert!(!state.settings_dirty);
+
+        let changed = state.update_draft_field(SettingsField::ContextWindow, "16384".to_string());
+        assert!(changed);
+        assert!(state.settings_dirty);
+        assert_eq!(state.draft().context_window, "16384");
+        assert_eq!(state.draft().default_model, "claude-3-5-sonnet");
+
+        let unchanged = state.update_draft_field(SettingsField::ContextWindow, "16384".to_string());
+        assert!(!unchanged);
     }
 
     #[test]

@@ -30,8 +30,8 @@ use super::backend::{
 };
 use super::request::PromptSubmissionModel;
 use super::state::{
-    HelperGenerationStatus, MidiSlotErrorState, SettingsDraftState, SettingsTab, SettingsUiState,
-    mode_reference_requirement, mode_reference_requirement_satisfied,
+    HelperGenerationStatus, MidiSlotErrorState, SettingsDraftState, SettingsField, SettingsTab,
+    SettingsUiState, mode_reference_requirement, mode_reference_requirement_satisfied,
 };
 use super::utils::{
     choose_dropped_midi_path, display_file_name_from_path, dropped_path_to_load,
@@ -70,6 +70,7 @@ pub(super) struct SonantMainWindow {
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
     settings_ui_state: SettingsUiState,
+    is_syncing_settings_inputs: bool,
     input_track_model: InputTrackModel,
     recording_channel_enabled: [bool; 16],
     live_capture_transport_playing: bool,
@@ -179,6 +180,7 @@ impl SonantMainWindow {
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
             settings_ui_state,
+            is_syncing_settings_inputs: false,
             input_track_model,
             recording_channel_enabled,
             live_capture_transport_playing: false,
@@ -230,13 +232,15 @@ impl SonantMainWindow {
 
     fn on_settings_input_event(
         &mut self,
-        _state: &Entity<InputState>,
+        state: &Entity<InputState>,
         event: &InputEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(event, InputEvent::Change) {
-            self.sync_settings_state_from_inputs(cx);
+        if matches!(event, InputEvent::Change)
+            && !self.is_syncing_settings_inputs
+            && self.sync_settings_draft_field_from_input(state, cx)
+        {
             cx.notify();
         }
     }
@@ -273,6 +277,7 @@ impl SonantMainWindow {
 
     fn sync_settings_inputs_from_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.settings_ui_state.draft().clone();
+        self.is_syncing_settings_inputs = true;
         self.settings_anthropic_api_key_input
             .update(cx, |input, cx| {
                 input.set_value(draft.anthropic_api_key.clone(), window, cx);
@@ -289,6 +294,34 @@ impl SonantMainWindow {
         self.settings_context_window_input.update(cx, |input, cx| {
             input.set_value(draft.context_window.clone(), window, cx);
         });
+        self.is_syncing_settings_inputs = false;
+    }
+
+    fn sync_settings_draft_field_from_input(
+        &mut self,
+        state: &Entity<InputState>,
+        cx: &App,
+    ) -> bool {
+        let field = if state == &self.settings_anthropic_api_key_input {
+            Some(SettingsField::AnthropicApiKey)
+        } else if state == &self.settings_openai_api_key_input {
+            Some(SettingsField::OpenAiApiKey)
+        } else if state == &self.settings_custom_base_url_input {
+            Some(SettingsField::CustomBaseUrl)
+        } else if state == &self.settings_default_model_input {
+            Some(SettingsField::DefaultModel)
+        } else if state == &self.settings_context_window_input {
+            Some(SettingsField::ContextWindow)
+        } else {
+            None
+        };
+
+        let Some(field) = field else {
+            return false;
+        };
+
+        let value = state.read(cx).value().to_string();
+        self.settings_ui_state.update_draft_field(field, value)
     }
 
     fn collect_settings_draft_from_inputs(&self, cx: &App) -> SettingsDraftState {
