@@ -1639,7 +1639,7 @@ impl Render for SonantMainWindow {
             .text_color(colors.surface_foreground)
             .child(
                 div()
-                    .id("main_header")
+                    .id("main-header")
                     .flex()
                     .items_center()
                     .justify_between()
@@ -1685,7 +1685,7 @@ impl Render for SonantMainWindow {
                             .gap_2()
                             .child(
                                 div()
-                                    .id("api_status_badge")
+                                    .id("api-status-badge")
                                     .px_2()
                                     .py_1()
                                     .rounded(radius.control)
@@ -1696,7 +1696,7 @@ impl Render for SonantMainWindow {
                                     .child(provider_status_label),
                             )
                             .child(
-                                Button::new("settings_button")
+                                Button::new("settings-button")
                                     .label("Settings")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.on_open_settings_clicked(window, cx)
@@ -1706,14 +1706,14 @@ impl Render for SonantMainWindow {
             )
             .child(
                 div()
-                    .id("main_layout")
+                    .id("main-layout")
                     .flex()
                     .gap(spacing.section_gap)
                     .h_full()
                     .min_h(px(480.0))
                     .child(
                         div()
-                            .id("left_sidebar")
+                            .id("left-sidebar")
                             .w(px(420.0))
                             .flex_none()
                             .flex()
@@ -1722,7 +1722,7 @@ impl Render for SonantMainWindow {
                             .overflow_y_scrollbar()
                             .child(
                                 div()
-                                    .id("prompt_mode_model_panel")
+                                    .id("prompt-mode-model-panel")
                                     .w_full()
                                     .flex()
                                     .flex_col()
@@ -1802,7 +1802,7 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .id("input_tracks_panel")
+                                    .id("input-tracks-panel")
                                     .w_full()
                                     .flex()
                                     .flex_col()
@@ -1936,7 +1936,7 @@ impl Render for SonantMainWindow {
                                     )
                                     .child(
                                         div()
-                                            .id("midi_slot_selected")
+                                            .id("midi-slot-selected")
                                             .flex()
                                             .flex_col()
                                             .gap_2()
@@ -2184,7 +2184,7 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .id("generated_patterns_panel")
+                                    .id("generated-patterns-panel")
                                     .flex()
                                     .flex_col()
                                     .gap_2()
@@ -2223,7 +2223,7 @@ impl Render for SonantMainWindow {
                     )
                     .child(
                         div()
-                            .id("right_main")
+                            .id("right-main")
                             .flex_1()
                             .flex()
                             .flex_col()
@@ -2231,7 +2231,7 @@ impl Render for SonantMainWindow {
                             .overflow_hidden()
                             .child(
                                 div()
-                                    .id("params_panel")
+                                    .id("params-panel")
                                     .flex()
                                     .flex_col()
                                     .gap_2()
@@ -2278,7 +2278,7 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .id("piano_roll_panel")
+                                    .id("piano-roll-panel")
                                     .flex_1()
                                     .min_h(px(260.0))
                                     .flex()
@@ -2311,7 +2311,7 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 div()
-                                    .id("main_footer")
+                                    .id("main-footer")
                                     .flex()
                                     .items_center()
                                     .justify_between()
