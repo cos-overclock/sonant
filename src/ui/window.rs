@@ -80,7 +80,7 @@ pub(super) struct SonantMainWindow {
     live_capture_transport_playing: bool,
     live_capture_playhead_ppq: f64,
     selected_generation_mode: GenerationMode,
-    slot_visibility: [bool; 7],
+    visible_slot_rows: Vec<ReferenceSlot>,
     add_track_menu_open: bool,
     generation_status: HelperGenerationStatus,
     validation_error: Option<String>,
@@ -195,7 +195,7 @@ impl SonantMainWindow {
             live_capture_transport_playing: false,
             live_capture_playhead_ppq: 0.0,
             selected_generation_mode: GenerationMode::Melody,
-            slot_visibility: [false; 7],
+            visible_slot_rows: vec![],
             add_track_menu_open: false,
             generation_status: HelperGenerationStatus::Idle,
             validation_error: None,
@@ -491,6 +491,7 @@ impl SonantMainWindow {
             };
             self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
                 ReferenceSlot::Melody,
+                0,
                 error.user_message(),
             ));
             cx.notify();
@@ -639,36 +640,28 @@ impl SonantMainWindow {
     }
 
     fn on_add_track_slot_selected(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
-        let index = Self::reference_slot_index(slot);
-        self.slot_visibility[index] = true;
+        self.visible_slot_rows.push(slot);
         self.add_track_menu_open = false;
         cx.notify();
     }
 
-    fn on_remove_track_clicked(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
-        let index = Self::reference_slot_index(slot);
-        self.slot_visibility[index] = false;
-        cx.notify();
-    }
-
-    fn slot_is_visible(&self, slot: ReferenceSlot) -> bool {
-        self.slot_visibility[Self::reference_slot_index(slot)]
-    }
-
-    fn visible_slots(&self) -> Vec<ReferenceSlot> {
-        Self::reference_slots()
-            .iter()
-            .copied()
-            .filter(|&slot| self.slot_is_visible(slot))
-            .collect()
-    }
-
-    fn available_slots_to_add(&self) -> Vec<ReferenceSlot> {
-        Self::reference_slots()
-            .iter()
-            .copied()
-            .filter(|&slot| !self.slot_is_visible(slot))
-            .collect()
+    fn on_remove_track_row(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        if row_index < self.visible_slot_rows.len() {
+            let slot = self.visible_slot_rows[row_index];
+            self.visible_slot_rows.remove(row_index);
+            self.clear_midi_slot_error_for_row(slot, row_index);
+            // adjust row_index in remaining errors for rows that shifted down
+            for error in &mut self.midi_slot_errors {
+                if error.slot == slot && error.row_index > row_index {
+                    error.row_index -= 1;
+                }
+            }
+            // if no more rows for this slot, clear the underlying file references
+            if !self.visible_slot_rows.contains(&slot) {
+                self.on_clear_midi_slot_clicked(slot, cx);
+            }
+            cx.notify();
+        }
     }
 
     fn on_slot_source_toggled(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
@@ -776,7 +769,7 @@ impl SonantMainWindow {
         if let Some(existing) = self
             .midi_slot_errors
             .iter_mut()
-            .find(|existing| existing.slot == error.slot)
+            .find(|e| e.slot == error.slot && e.row_index == error.row_index)
         {
             *existing = error;
         } else {
@@ -789,10 +782,19 @@ impl SonantMainWindow {
             .retain(|existing| existing.slot != slot);
     }
 
-    fn midi_slot_error_for_slot(&self, slot: ReferenceSlot) -> Option<&MidiSlotErrorState> {
+    fn clear_midi_slot_error_for_row(&mut self, slot: ReferenceSlot, row_index: usize) {
+        self.midi_slot_errors
+            .retain(|e| !(e.slot == slot && e.row_index == row_index));
+    }
+
+    fn midi_slot_error_for_row(
+        &self,
+        slot: ReferenceSlot,
+        row_index: usize,
+    ) -> Option<&MidiSlotErrorState> {
         self.midi_slot_errors
             .iter()
-            .find(|error| error.slot == slot)
+            .find(|e| e.slot == slot && e.row_index == row_index)
     }
 
     fn sync_midi_input_router_config(&mut self) -> Result<(), String> {
@@ -917,6 +919,7 @@ impl SonantMainWindow {
     fn on_select_midi_file_clicked(
         &mut self,
         slot: ReferenceSlot,
+        row_index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -950,6 +953,7 @@ impl SonantMainWindow {
                             if !has_supported_midi_extension(&path) {
                                 view.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
                                     slot,
+                                    row_index,
                                     MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE,
                                 ));
                                 cx.notify();
@@ -957,7 +961,7 @@ impl SonantMainWindow {
                             }
 
                             let path = path.to_string_lossy().to_string();
-                            view.set_midi_slot_file(slot, path, cx);
+                            view.set_midi_slot_file(slot, row_index, path, cx);
                         });
                     }
                 }
@@ -966,7 +970,7 @@ impl SonantMainWindow {
                     let message = format!("Could not open the file dialog: {error}");
                     let _ = view.update_in(window, |view, _window, cx| {
                         view.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
-                            slot, message,
+                            slot, row_index, message,
                         ));
                         cx.notify();
                     });
@@ -978,6 +982,7 @@ impl SonantMainWindow {
     fn on_midi_slot_drop(
         &mut self,
         slot: ReferenceSlot,
+        row_index: usize,
         paths: &ExternalPaths,
         cx: &mut Context<Self>,
     ) {
@@ -992,17 +997,24 @@ impl SonantMainWindow {
         let Some(path) = dropped_path_to_load(paths) else {
             self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
                 slot,
+                row_index,
                 MIDI_SLOT_DROP_ERROR_MESSAGE,
             ));
             cx.notify();
             return;
         };
 
-        self.set_midi_slot_file(slot, path, cx);
+        self.set_midi_slot_file(slot, row_index, path, cx);
     }
 
-    fn set_midi_slot_file(&mut self, slot: ReferenceSlot, path: String, cx: &mut Context<Self>) {
-        self.clear_midi_slot_error(slot);
+    fn set_midi_slot_file(
+        &mut self,
+        slot: ReferenceSlot,
+        row_index: usize,
+        path: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_midi_slot_error_for_row(slot, row_index);
         match self.load_midi_use_case.execute(LoadMidiCommand::SetFile {
             slot,
             path: path.clone(),
@@ -1010,36 +1022,34 @@ impl SonantMainWindow {
             Ok(_) => cx.notify(),
             Err(error) => {
                 self.upsert_midi_slot_error(MidiSlotErrorState::from_load_error(
-                    slot, &path, &error,
+                    slot, row_index, &path, &error,
                 ));
                 cx.notify();
             }
         }
     }
 
-    fn on_retry_midi_slot_clicked(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
+    fn on_retry_midi_slot_clicked(
+        &mut self,
+        slot: ReferenceSlot,
+        row_index: usize,
+        cx: &mut Context<Self>,
+    ) {
         let retry_path = self
-            .midi_slot_error_for_slot(slot)
+            .midi_slot_error_for_row(slot, row_index)
             .and_then(|error| error.retry_path.clone());
         if let Some(path) = retry_path {
-            self.set_midi_slot_file(slot, path, cx);
+            self.set_midi_slot_file(slot, row_index, path, cx);
         }
     }
 
     fn on_clear_midi_slot_clicked(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
         self.clear_midi_slot_error(slot);
-        match self
+        if let Ok(_) = self
             .load_midi_use_case
             .execute(LoadMidiCommand::ClearSlot { slot })
         {
-            Ok(_) => cx.notify(),
-            Err(error) => {
-                self.upsert_midi_slot_error(MidiSlotErrorState::non_retryable(
-                    slot,
-                    error.user_message(),
-                ));
-                cx.notify();
-            }
+            cx.notify();
         }
     }
 
@@ -1715,10 +1725,9 @@ impl Render for SonantMainWindow {
                             )
                             .child(
                                 {
-                                let visible_slots = self.visible_slots();
-                                let available_slots = self.available_slots_to_add();
+                                let visible_slot_rows = self.visible_slot_rows.clone();
                                 let add_menu_open = self.add_track_menu_open;
-                                let has_visible = !visible_slots.is_empty();
+                                let has_visible = !visible_slot_rows.is_empty();
 
                                 div()
                                     .id("input-tracks-section")
@@ -1735,8 +1744,7 @@ impl Render for SonantMainWindow {
                                             .items_center()
                                             .justify_between()
                                             .child(Self::section_label("Input Tracks", colors))
-                                            .when(!available_slots.is_empty(), |el| {
-                                                el.child(
+                                            .child(
                                                     div()
                                                         .id("add-track-btn-header")
                                                         .px_1()
@@ -1750,8 +1758,7 @@ impl Render for SonantMainWindow {
                                                             this.on_add_track_clicked(cx);
                                                         }))
                                                         .child(if add_menu_open { "- Cancel" } else { "+ Add" }),
-                                                )
-                                            }),
+                                            ),
                                     )
                                     // Add Track menu (shown when add_menu_open)
                                     .when(add_menu_open, |el| {
@@ -1774,7 +1781,7 @@ impl Render for SonantMainWindow {
                                                         .font_weight(gpui::FontWeight::BOLD)
                                                         .child("SELECT TYPE"),
                                                 )
-                                                .children(available_slots.iter().copied().map(|slot| {
+                                                .children(Self::reference_slots().iter().copied().map(|slot| {
                                                     let slot_color = colors.slot_color(slot);
                                                     let short_label = Self::slot_short_label(slot);
                                                     div()
@@ -1853,11 +1860,11 @@ impl Render for SonantMainWindow {
                                                     }
                                                 })
                                                 .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
-                                                    // Drop onto empty zone: add first available slot and load file
-                                                    if let Some(first_slot) = this.available_slots_to_add().into_iter().next() {
-                                                        this.on_add_track_slot_selected(first_slot, cx);
-                                                        this.on_midi_slot_drop(first_slot, paths, cx);
-                                                    }
+                                                    // Drop onto empty zone: add Melody slot and load file
+                                                    let first_slot = ReferenceSlot::Melody;
+                                                    this.on_add_track_slot_selected(first_slot, cx);
+                                                    let row_index = this.visible_slot_rows.len().saturating_sub(1);
+                                                    this.on_midi_slot_drop(first_slot, row_index, paths, cx);
                                                 }))
                                                 .child(
                                                     div()
@@ -1917,21 +1924,21 @@ impl Render for SonantMainWindow {
                                                                 .child("Type"),
                                                         ),
                                                 )
-                                                .children(visible_slots.iter().copied().map(|slot| {
+                                                .children(visible_slot_rows.iter().copied().enumerate().map(|(row_index, slot)| {
                                                     let slot_color = colors.slot_color(slot);
                                                     let source_label = self.slot_source_display_label(slot);
                                                     let short_label = Self::slot_short_label(slot);
                                                     let is_live = self.source_for_slot(slot) == ReferenceSource::Live;
                                                     let live_ch = self.channel_mapping_for_slot(slot).unwrap_or(1);
                                                     let monitoring_on = is_live && self.recording_enabled_for_channel(live_ch);
-                                                    let slot_error = self.midi_slot_error_for_slot(slot).cloned();
+                                                    let slot_error = self.midi_slot_error_for_row(slot, row_index).cloned();
                                                     let slot_has_file = {
                                                         let refs = self.load_midi_use_case.snapshot_references();
                                                         refs.iter().any(|r| r.slot == slot)
                                                     };
 
                                                     div()
-                                                        .id(("track-row", Self::reference_slot_index(slot)))
+                                                        .id(("track-row", row_index))
                                                         .flex()
                                                         .items_center()
                                                         .h(px(40.0))
@@ -1958,7 +1965,7 @@ impl Render for SonantMainWindow {
                                                         })
                                                         .on_drop(cx.listener(
                                                             move |this, paths: &ExternalPaths, _window, cx| {
-                                                                this.on_midi_slot_drop(slot, paths, cx)
+                                                                this.on_midi_slot_drop(slot, row_index, paths, cx)
                                                             },
                                                         ))
                                                         // Color stripe
@@ -1980,7 +1987,7 @@ impl Render for SonantMainWindow {
                                                                 .min_w(px(0.0))
                                                                 .child(
                                                                     div()
-                                                                        .id(("slot-source-label", Self::reference_slot_index(slot)))
+                                                                        .id(("slot-source-label", row_index))
                                                                         .flex_1()
                                                                         .min_w(px(0.0))
                                                                         .overflow_hidden()
@@ -1989,7 +1996,7 @@ impl Render for SonantMainWindow {
                                                                         .cursor_pointer()
                                                                         .hover(|s| s.text_color(colors.primary))
                                                                         .on_click(cx.listener(move |this, _, window, cx| {
-                                                                            this.on_select_midi_file_clicked(slot, window, cx);
+                                                                            this.on_select_midi_file_clicked(slot, row_index, window, cx);
                                                                         }))
                                                                         .child(source_label),
                                                                 )
@@ -2022,7 +2029,7 @@ impl Render for SonantMainWindow {
                                                                 // Source toggle
                                                                 .child(
                                                                     div()
-                                                                        .id(("slot-source-toggle", Self::reference_slot_index(slot)))
+                                                                        .id(("slot-source-toggle", row_index))
                                                                         .px(px(4.0))
                                                                         .py(px(2.0))
                                                                         .rounded(px(3.0))
@@ -2039,7 +2046,7 @@ impl Render for SonantMainWindow {
                                                                 // Monitoring button
                                                                 .child(
                                                                     div()
-                                                                        .id(("slot-monitor", Self::reference_slot_index(slot)))
+                                                                        .id(("slot-monitor", row_index))
                                                                         .w(px(20.0))
                                                                         .h(px(20.0))
                                                                         .flex()
@@ -2061,7 +2068,7 @@ impl Render for SonantMainWindow {
                                                                 .when(!is_live && slot_has_file, |el| {
                                                                     el.child(
                                                                         div()
-                                                                            .id(("slot-clear", Self::reference_slot_index(slot)))
+                                                                            .id(("slot-clear", row_index))
                                                                             .w(px(20.0))
                                                                             .h(px(20.0))
                                                                             .flex()
@@ -2081,7 +2088,7 @@ impl Render for SonantMainWindow {
                                                                 // Remove track button
                                                                 .child(
                                                                     div()
-                                                                        .id(("slot-remove", Self::reference_slot_index(slot)))
+                                                                        .id(("slot-remove", row_index))
                                                                         .w(px(20.0))
                                                                         .h(px(20.0))
                                                                         .flex()
@@ -2093,17 +2100,17 @@ impl Render for SonantMainWindow {
                                                                         .cursor_pointer()
                                                                         .hover(|s| s.text_color(colors.error_foreground))
                                                                         .on_click(cx.listener(move |this, _, _window, cx| {
-                                                                            this.on_remove_track_clicked(slot, cx);
+                                                                            this.on_remove_track_row(row_index, cx);
                                                                         }))
                                                                         .child("-"),
                                                                 ),
                                                         )
                                                         // Error indicator
                                                         .children(slot_error.into_iter().map(|error| {
-                                                            let retry_slot = error.slot;
+                                                            let error_row = error.row_index;
                                                             let can_retry = error.can_retry();
                                                             div()
-                                                                .id(("slot-error", Self::reference_slot_index(retry_slot)))
+                                                                .id(("slot-error", error_row))
                                                                 .absolute()
                                                                 .bottom(px(0.0))
                                                                 .left(px(6.0))
@@ -2115,7 +2122,7 @@ impl Render for SonantMainWindow {
                                                                 .when(can_retry, |el| {
                                                                     el.cursor_pointer()
                                                                         .on_click(cx.listener(move |this, _, _window, cx| {
-                                                                            this.on_retry_midi_slot_clicked(retry_slot, cx);
+                                                                            this.on_retry_midi_slot_clicked(slot, error_row, cx);
                                                                         }))
                                                                 })
                                                         }))
