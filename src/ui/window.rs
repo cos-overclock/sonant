@@ -81,6 +81,7 @@ pub(super) struct SonantMainWindow {
     live_capture_playhead_ppq: f64,
     selected_generation_mode: GenerationMode,
     visible_slot_rows: Vec<ReferenceSlot>,
+    piano_roll_hidden_rows: std::collections::HashSet<usize>,
     add_track_menu_open: bool,
     channel_menu_open: Option<usize>, // row_index of the row whose channel menu is open
     generation_status: HelperGenerationStatus,
@@ -197,6 +198,7 @@ impl SonantMainWindow {
             live_capture_playhead_ppq: 0.0,
             selected_generation_mode: GenerationMode::Melody,
             visible_slot_rows: vec![],
+            piano_roll_hidden_rows: std::collections::HashSet::new(),
             add_track_menu_open: false,
             channel_menu_open: None,
             generation_status: HelperGenerationStatus::Idle,
@@ -658,12 +660,29 @@ impl SonantMainWindow {
                     error.row_index -= 1;
                 }
             }
+            // adjust piano_roll_hidden_rows: remove deleted row, shift down higher indices
+            self.piano_roll_hidden_rows.remove(&row_index);
+            let shifted: std::collections::HashSet<usize> = self
+                .piano_roll_hidden_rows
+                .drain()
+                .map(|i| if i > row_index { i - 1 } else { i })
+                .collect();
+            self.piano_roll_hidden_rows = shifted;
             // if no more rows for this slot, clear the underlying file references
             if !self.visible_slot_rows.contains(&slot) {
                 self.on_clear_midi_slot_clicked(slot, cx);
             }
             cx.notify();
         }
+    }
+
+    fn on_piano_roll_visibility_toggled(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        if self.piano_roll_hidden_rows.contains(&row_index) {
+            self.piano_roll_hidden_rows.remove(&row_index);
+        } else {
+            self.piano_roll_hidden_rows.insert(row_index);
+        }
+        cx.notify();
     }
 
     fn on_slot_source_toggled(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
@@ -1957,6 +1976,7 @@ impl Render for SonantMainWindow {
                                                     let live_ch = self.channel_mapping_for_slot(slot).unwrap_or(1);
                                                     let monitoring_on = is_live && self.recording_enabled_for_channel(live_ch);
                                                     let slot_error = self.midi_slot_error_for_row(slot, row_index).cloned();
+                                                    let piano_roll_visible = !self.piano_roll_hidden_rows.contains(&row_index);
                                                     let slot_has_file = {
                                                         let refs = self.load_midi_use_case.snapshot_references();
                                                         refs.iter().any(|r| r.slot == slot)
@@ -2070,7 +2090,7 @@ impl Render for SonantMainWindow {
                                                                         .on_click(cx.listener(move |this, _, _window, cx| {
                                                                             this.on_slot_source_toggled(slot, cx);
                                                                         }))
-                                                                        .child(if is_live { "LIVE" } else { "FILE" }),
+                                                                        .child(if is_live { "INPUT" } else { "FILE" }),
                                                                 )
                                                                 // Monitoring toggle (LIVE only)
                                                                 .child(
@@ -2097,7 +2117,26 @@ impl Render for SonantMainWindow {
                                                                         })
                                                                         .child("●"),
                                                                 )
-                                                                // Clear file (file source with file loaded)
+                                                                // Piano roll visibility toggle
+                                                                .child(
+                                                                    div()
+                                                                        .id(("slot-visible", row_index))
+                                                                        .w(px(20.0))
+                                                                        .h(px(20.0))
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .rounded(px(999.0))
+                                                                        .text_size(px(11.0))
+                                                                        .text_color(if piano_roll_visible { colors.surface_foreground } else { colors.panel_border })
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.text_color(colors.surface_foreground))
+                                                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                                                            this.on_piano_roll_visibility_toggled(row_index, cx);
+                                                                        }))
+                                                                        .child(if piano_roll_visible { "👁" } else { "🚫" }),
+                                                                )
+                                                                // Clear file (file source with file loaded) — trash icon
                                                                 .when(!is_live && slot_has_file, |el| {
                                                                     el.child(
                                                                         div()
@@ -2108,17 +2147,17 @@ impl Render for SonantMainWindow {
                                                                             .items_center()
                                                                             .justify_center()
                                                                             .rounded(px(999.0))
-                                                                            .text_size(px(12.0))
+                                                                            .text_size(px(11.0))
                                                                             .text_color(colors.muted_foreground)
                                                                             .cursor_pointer()
                                                                             .hover(|s| s.text_color(colors.error_foreground))
                                                                             .on_click(cx.listener(move |this, _, _window, cx| {
                                                                                 this.on_clear_midi_slot_clicked(slot, cx);
                                                                             }))
-                                                                            .child("x"),
+                                                                            .child("🗑"),
                                                                     )
                                                                 })
-                                                                // Remove track button
+                                                                // Remove track button — trash icon
                                                                 .child(
                                                                     div()
                                                                         .id(("slot-remove", row_index))
@@ -2135,7 +2174,7 @@ impl Render for SonantMainWindow {
                                                                         .on_click(cx.listener(move |this, _, _window, cx| {
                                                                             this.on_remove_track_row(row_index, cx);
                                                                         }))
-                                                                        .child("-"),
+                                                                        .child("🗑"),
                                                                 ),
                                                         )
                                                         // Error indicator
