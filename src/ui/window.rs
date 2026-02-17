@@ -30,8 +30,8 @@ use super::backend::{
 };
 use super::request::PromptSubmissionModel;
 use super::state::{
-    HelperGenerationStatus, MidiSlotErrorState, mode_reference_requirement,
-    mode_reference_requirement_satisfied,
+    HelperGenerationStatus, MidiSlotErrorState, SettingsDraftState, SettingsTab, SettingsUiState,
+    mode_reference_requirement, mode_reference_requirement_satisfied,
 };
 use super::utils::{
     choose_dropped_midi_path, display_file_name_from_path, dropped_path_to_load,
@@ -41,7 +41,9 @@ use super::{
     API_KEY_PLACEHOLDER, JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE,
     MIDI_SLOT_DROP_HINT, MIDI_SLOT_EMPTY_LABEL, MIDI_SLOT_FILE_PICKER_PROMPT,
     MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_HEIGHT_PX, PROMPT_EDITOR_ROWS,
-    PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE,
+    PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE, SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER,
+    SETTINGS_CONTEXT_WINDOW_PLACEHOLDER, SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER,
+    SETTINGS_DEFAULT_MODEL_PLACEHOLDER, SETTINGS_OPENAI_API_KEY_PLACEHOLDER,
 };
 
 const LIVE_CAPTURE_POLL_INTERVAL_MS: u64 = 30;
@@ -52,11 +54,22 @@ pub(super) struct SonantMainWindow {
     _prompt_input_subscription: Subscription,
     api_key_input: Entity<InputState>,
     _api_key_input_subscription: Subscription,
+    settings_anthropic_api_key_input: Entity<InputState>,
+    _settings_anthropic_api_key_subscription: Subscription,
+    settings_openai_api_key_input: Entity<InputState>,
+    _settings_openai_api_key_subscription: Subscription,
+    settings_custom_base_url_input: Entity<InputState>,
+    _settings_custom_base_url_subscription: Subscription,
+    settings_default_model_input: Entity<InputState>,
+    _settings_default_model_subscription: Subscription,
+    settings_context_window_input: Entity<InputState>,
+    _settings_context_window_subscription: Subscription,
     load_midi_use_case: Arc<LoadMidiUseCase>,
     live_midi_capture: LiveMidiCapture,
     midi_input_router: MidiInputRouter,
     generation_job_manager: Arc<GenerationJobManager>,
     submission_model: PromptSubmissionModel,
+    settings_ui_state: SettingsUiState,
     input_track_model: InputTrackModel,
     recording_channel_enabled: [bool; 16],
     live_capture_transport_playing: bool,
@@ -92,8 +105,53 @@ impl SonantMainWindow {
         });
         let api_key_input_subscription =
             cx.subscribe_in(&api_key_input, window, Self::on_api_key_input_event);
+        let settings_anthropic_api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER)
+                .masked(true)
+        });
+        let settings_anthropic_api_key_subscription = cx.subscribe_in(
+            &settings_anthropic_api_key_input,
+            window,
+            Self::on_settings_input_event,
+        );
+        let settings_openai_api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(SETTINGS_OPENAI_API_KEY_PLACEHOLDER)
+                .masked(true)
+        });
+        let settings_openai_api_key_subscription = cx.subscribe_in(
+            &settings_openai_api_key_input,
+            window,
+            Self::on_settings_input_event,
+        );
+        let settings_custom_base_url_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(SETTINGS_CUSTOM_BASE_URL_PLACEHOLDER)
+        });
+        let settings_custom_base_url_subscription = cx.subscribe_in(
+            &settings_custom_base_url_input,
+            window,
+            Self::on_settings_input_event,
+        );
+        let settings_default_model_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(SETTINGS_DEFAULT_MODEL_PLACEHOLDER));
+        let settings_default_model_subscription = cx.subscribe_in(
+            &settings_default_model_input,
+            window,
+            Self::on_settings_input_event,
+        );
+        let settings_context_window_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(SETTINGS_CONTEXT_WINDOW_PLACEHOLDER));
+        let settings_context_window_subscription = cx.subscribe_in(
+            &settings_context_window_input,
+            window,
+            Self::on_settings_input_event,
+        );
 
         let backend = build_generation_backend();
+        let settings_ui_state = SettingsUiState::new(SettingsDraftState::with_default_model(
+            backend.default_model.model.clone(),
+        ));
         let input_track_model = InputTrackModel::new();
         let recording_channel_enabled = [false; 16];
         let (live_input_source, live_input_error) = resolve_live_input_source();
@@ -105,11 +163,22 @@ impl SonantMainWindow {
             _prompt_input_subscription: prompt_input_subscription,
             api_key_input,
             _api_key_input_subscription: api_key_input_subscription,
+            settings_anthropic_api_key_input,
+            _settings_anthropic_api_key_subscription: settings_anthropic_api_key_subscription,
+            settings_openai_api_key_input,
+            _settings_openai_api_key_subscription: settings_openai_api_key_subscription,
+            settings_custom_base_url_input,
+            _settings_custom_base_url_subscription: settings_custom_base_url_subscription,
+            settings_default_model_input,
+            _settings_default_model_subscription: settings_default_model_subscription,
+            settings_context_window_input,
+            _settings_context_window_subscription: settings_context_window_subscription,
             load_midi_use_case: Arc::new(LoadMidiUseCase::new()),
             live_midi_capture,
             midi_input_router,
             generation_job_manager: Arc::clone(&backend.job_manager),
             submission_model: PromptSubmissionModel::new(backend.default_model),
+            settings_ui_state,
             input_track_model,
             recording_channel_enabled,
             live_capture_transport_playing: false,
@@ -130,6 +199,7 @@ impl SonantMainWindow {
         if let Err(error) = this.sync_midi_input_router_config() {
             this.input_track_error = Some(error);
         }
+        this.sync_settings_inputs_from_draft(window, cx);
         this.start_live_capture_polling(window, cx);
         this
     }
@@ -156,6 +226,104 @@ impl SonantMainWindow {
         if matches!(event, InputEvent::Change) && self.api_key_error.take().is_some() {
             cx.notify();
         }
+    }
+
+    fn on_settings_input_event(
+        &mut self,
+        _state: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change) {
+            self.sync_settings_state_from_inputs(cx);
+            cx.notify();
+        }
+    }
+
+    fn on_open_settings_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_ui_state.open_settings();
+        self.sync_settings_inputs_from_draft(window, cx);
+        cx.notify();
+    }
+
+    fn on_close_settings_clicked(&mut self, cx: &mut Context<Self>) {
+        self.settings_ui_state.close_settings();
+        cx.notify();
+    }
+
+    fn on_settings_tab_selected(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
+        if self.settings_ui_state.settings_tab != tab {
+            self.settings_ui_state.select_settings_tab(tab);
+            cx.notify();
+        }
+    }
+
+    fn on_discard_settings_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_ui_state.discard_and_close();
+        self.sync_settings_inputs_from_draft(window, cx);
+        cx.notify();
+    }
+
+    fn on_save_settings_clicked(&mut self, cx: &mut Context<Self>) {
+        self.sync_settings_state_from_inputs(cx);
+        self.settings_ui_state.save_and_close();
+        cx.notify();
+    }
+
+    fn sync_settings_inputs_from_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let draft = self.settings_ui_state.draft().clone();
+        self.settings_anthropic_api_key_input
+            .update(cx, |input, cx| {
+                input.set_value(draft.anthropic_api_key.clone(), window, cx);
+            });
+        self.settings_openai_api_key_input.update(cx, |input, cx| {
+            input.set_value(draft.openai_api_key.clone(), window, cx);
+        });
+        self.settings_custom_base_url_input.update(cx, |input, cx| {
+            input.set_value(draft.custom_base_url.clone(), window, cx);
+        });
+        self.settings_default_model_input.update(cx, |input, cx| {
+            input.set_value(draft.default_model.clone(), window, cx);
+        });
+        self.settings_context_window_input.update(cx, |input, cx| {
+            input.set_value(draft.context_window.clone(), window, cx);
+        });
+    }
+
+    fn collect_settings_draft_from_inputs(&self, cx: &App) -> SettingsDraftState {
+        SettingsDraftState {
+            anthropic_api_key: self
+                .settings_anthropic_api_key_input
+                .read(cx)
+                .value()
+                .to_string(),
+            openai_api_key: self
+                .settings_openai_api_key_input
+                .read(cx)
+                .value()
+                .to_string(),
+            custom_base_url: self
+                .settings_custom_base_url_input
+                .read(cx)
+                .value()
+                .to_string(),
+            default_model: self
+                .settings_default_model_input
+                .read(cx)
+                .value()
+                .to_string(),
+            context_window: self
+                .settings_context_window_input
+                .read(cx)
+                .value()
+                .to_string(),
+        }
+    }
+
+    fn sync_settings_state_from_inputs(&mut self, cx: &App) {
+        let draft = self.collect_settings_draft_from_inputs(cx);
+        self.settings_ui_state.update_draft(draft);
     }
 
     fn on_generate_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -345,6 +513,14 @@ impl SonantMainWindow {
 
     fn recording_channel_button_id(channel: u8) -> (&'static str, usize) {
         ("recording-channel", usize::from(channel))
+    }
+
+    fn settings_tab_button_id(tab: SettingsTab) -> &'static str {
+        match tab {
+            SettingsTab::ApiKeys => "settings-tab-api-keys",
+            SettingsTab::MidiSettings => "settings-tab-midi-settings",
+            SettingsTab::General => "settings-tab-general",
+        }
     }
 
     fn on_reference_slot_selected(&mut self, slot: ReferenceSlot, cx: &mut Context<Self>) {
@@ -1049,6 +1225,199 @@ fn resolve_live_channel_mapping_for_slot(
 
 impl Render for SonantMainWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.settings_ui_state.is_settings_open() {
+            let selected_tab = self.settings_ui_state.settings_tab;
+            let saved_provider_status = self.settings_ui_state.provider_status;
+            let draft_provider_status = self.settings_ui_state.draft_provider_status();
+            let settings_dirty = self.settings_ui_state.settings_dirty;
+            let dirty_fields = self.settings_ui_state.dirty_fields();
+            let dirty_count = dirty_fields.len();
+            let saved_settings = self.settings_ui_state.saved();
+            let draft_settings = self.settings_ui_state.draft();
+            let tab_button = |tab: SettingsTab| {
+                let button = Button::new(Self::settings_tab_button_id(tab))
+                    .label(tab.label())
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.on_settings_tab_selected(tab, cx)
+                    }));
+                if selected_tab == tab {
+                    button.primary()
+                } else {
+                    button
+                }
+            };
+
+            return div()
+                .size_full()
+                .overflow_y_scrollbar()
+                .overflow_x_hidden()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_4()
+                .bg(rgb(0x111827))
+                .text_color(rgb(0xf9fafb))
+                .child(
+                    div()
+                        .id("settings-header")
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(Label::new("Settings"))
+                                .child(div().text_color(rgb(0x94a3b8)).child(
+                                    "FR-09 foundation: screen transitions and draft diff state.",
+                                )),
+                        )
+                        .child(Button::new("close-settings-button").label("Back").on_click(
+                            cx.listener(|this, _, _window, cx| this.on_close_settings_clicked(cx)),
+                        )),
+                )
+                .child(
+                    div()
+                        .id("provider-status-panel")
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .p_3()
+                        .border_1()
+                        .border_color(rgb(0x334155))
+                        .bg(rgb(0x0f172a))
+                        .child(
+                            div()
+                                .text_color(saved_provider_status.color())
+                                .child(format!("Saved Status: {}", saved_provider_status.label())),
+                        )
+                        .child(
+                            div()
+                                .text_color(draft_provider_status.color())
+                                .child(format!("Draft Status: {}", draft_provider_status.label())),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("settings-nav")
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(tab_button(SettingsTab::ApiKeys))
+                        .child(tab_button(SettingsTab::MidiSettings))
+                        .child(tab_button(SettingsTab::General)),
+                )
+                .child(match selected_tab {
+                    SettingsTab::ApiKeys => div()
+                        .id("settings-tab-api-keys-panel")
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_3()
+                        .border_1()
+                        .border_color(rgb(0x334155))
+                        .bg(rgb(0x0f172a))
+                        .child(Label::new("Anthropic API Key"))
+                        .child(Input::new(&self.settings_anthropic_api_key_input).mask_toggle())
+                        .child(Label::new("OpenAI-Compatible API Key"))
+                        .child(Input::new(&self.settings_openai_api_key_input).mask_toggle())
+                        .child(Label::new("Custom Base URL"))
+                        .child(Input::new(&self.settings_custom_base_url_input)),
+                    SettingsTab::MidiSettings => div()
+                        .id("settings-tab-midi-panel")
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_3()
+                        .border_1()
+                        .border_color(rgb(0x334155))
+                        .bg(rgb(0x0f172a))
+                        .child(Label::new("MIDI Settings"))
+                        .child(
+                            div()
+                                .text_color(rgb(0x94a3b8))
+                                .child("MIDI settings UI will be added in FR-09 follow-up issues."),
+                        )
+                        .child(div().text_color(rgb(0x94a3b8)).child(
+                            "Current issue focuses on state transitions and dirty tracking.",
+                        )),
+                    SettingsTab::General => div()
+                        .id("settings-tab-general-panel")
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_3()
+                        .border_1()
+                        .border_color(rgb(0x334155))
+                        .bg(rgb(0x0f172a))
+                        .child(Label::new("Default Model"))
+                        .child(Input::new(&self.settings_default_model_input))
+                        .child(Label::new("Context Window"))
+                        .child(Input::new(&self.settings_context_window_input)),
+                })
+                .child(
+                    div()
+                        .id("settings-diff-panel")
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .p_3()
+                        .border_1()
+                        .border_color(if settings_dirty {
+                            rgb(0x67e8f9)
+                        } else {
+                            rgb(0x334155)
+                        })
+                        .bg(if settings_dirty {
+                            rgb(0x082f49)
+                        } else {
+                            rgb(0x0f172a)
+                        })
+                        .child(div().child(format!(
+                            "settings_dirty: {} (changed fields: {dirty_count})",
+                            settings_dirty
+                        )))
+                        .child(div().text_color(rgb(0x94a3b8)).child(format!(
+                            "Saved default model: {} / Draft default model: {}",
+                            saved_settings.default_model, draft_settings.default_model
+                        )))
+                        .children(dirty_fields.into_iter().map(|field| {
+                            div()
+                                .text_color(rgb(0x93c5fd))
+                                .child(format!("Changed: {}", field.label()))
+                        })),
+                )
+                .child(
+                    div()
+                        .id("settings-footer-actions")
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            Button::new("settings-discard-button")
+                                .label("Cancel")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_discard_settings_clicked(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("settings-save-close-button")
+                                .primary()
+                                .label("Save & Close")
+                                .disabled(!settings_dirty)
+                                .on_click(cx.listener(|this, _, _window, cx| {
+                                    this.on_save_settings_clicked(cx)
+                                })),
+                        ),
+                );
+        }
+
+        let provider_status_label = self.settings_ui_state.provider_status.label();
+        let provider_status_color = self.settings_ui_state.provider_status.color();
+        let saved_default_model = self.settings_ui_state.saved().default_model.clone();
         let status_label = self.generation_status.label();
         let status_color = self.generation_status.color();
         let generating = self.generation_status.is_submitting_or_running();
@@ -1114,10 +1483,50 @@ impl Render for SonantMainWindow {
             .p_4()
             .bg(rgb(0x111827))
             .text_color(rgb(0xf9fafb))
-            .child(Label::new("Sonant GPUI Helper"))
-            .child(Label::new(
-                "FR-05: Prompt input and multi-slot reference MIDI editing are wired to app use cases.",
-            ))
+            .child(
+                div()
+                    .id("main-header")
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(Label::new("Sonant GPUI Helper"))
+                            .child(
+                                div().text_color(rgb(0x94a3b8)).child(
+                                    "FR-05 helper UI + FR-09 state foundation (settings transition/diff).",
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(0x93c5fd))
+                                    .child(format!("Saved Default Model: {saved_default_model}")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("api-status-badge")
+                                    .text_color(provider_status_color)
+                                    .child(provider_status_label),
+                            )
+                            .child(
+                                Button::new("settings-button")
+                                    .label("Settings")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.on_open_settings_clicked(window, cx)
+                                    })),
+                            ),
+                    ),
+            )
             .child(Label::new("API Key (testing)"))
             .child(Input::new(&self.api_key_input).mask_toggle())
             .children(self.api_key_error.iter().map(|message| {
