@@ -856,16 +856,12 @@ impl SonantMainWindow {
                                     .items_center()
                                     .border_b_1()
                                     .border_color(colors.piano_roll_grid_line)
-                                    .bg(if Self::piano_roll_is_black_key(midi_note) {
-                                        colors.surface_foreground.opacity(0.05)
-                                    } else {
-                                        colors.surface_background.opacity(0.0)
-                                    })
                                     .child(
                                         div()
                                             .w(px(PIANO_ROLL_KEY_LABEL_WIDTH))
                                             .h_full()
                                             .flex_none()
+                                            .bg(colors.panel_background)
                                             .pr(px(6.0))
                                             .flex()
                                             .items_center()
@@ -878,16 +874,25 @@ impl SonantMainWindow {
                                             })
                                             .child(note_label),
                                     )
-                                    .child(div().h_full().flex().flex_1().children(
-                                        (0..PIANO_ROLL_BEAT_COLUMNS).map(|_| {
-                                            div()
-                                                .h_full()
-                                                .w(px(PIANO_ROLL_BEAT_WIDTH))
-                                                .flex_none()
-                                                .border_l_1()
-                                                .border_color(colors.piano_roll_grid_line)
-                                        }),
-                                    ))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .flex()
+                                            .flex_1()
+                                            .bg(if Self::piano_roll_is_black_key(midi_note) {
+                                                colors.surface_foreground.opacity(0.05)
+                                            } else {
+                                                colors.surface_background.opacity(0.0)
+                                            })
+                                            .children((0..PIANO_ROLL_BEAT_COLUMNS).map(|_| {
+                                                div()
+                                                    .h_full()
+                                                    .w(px(PIANO_ROLL_BEAT_WIDTH))
+                                                    .flex_none()
+                                                    .border_l_1()
+                                                    .border_color(colors.piano_roll_grid_line)
+                                            })),
+                                    )
                             }),
                     ),
             )
