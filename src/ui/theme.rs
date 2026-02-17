@@ -32,7 +32,6 @@ pub(super) struct ThemeColors {
     pub(super) track_orange: Hsla,
     #[allow(dead_code)]
     pub(super) track_cyan: Hsla,
-    #[allow(dead_code)]
     pub(super) glow_primary: Hsla,
     #[allow(dead_code)]
     pub(super) glow_purple: Hsla,

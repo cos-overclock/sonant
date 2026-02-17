@@ -1638,13 +1638,31 @@ impl Render for SonantMainWindow {
                                     .rounded(radius.control)
                                     .border_1()
                                     .border_color(colors.panel_active_border)
-                                    .bg(colors.panel_active_background)
+                                    .bg(colors.primary)
+                                    .shadow(vec![gpui::BoxShadow {
+                                        color: colors.glow_primary,
+                                        offset: gpui::point(px(0.0), px(0.0)),
+                                        blur_radius: px(8.0),
+                                        spread_radius: px(0.0),
+                                    }])
                                     .flex()
                                     .items_center()
                                     .justify_center()
+                                    .text_color(gpui::white())
+                                    .font_weight(gpui::FontWeight::BOLD)
                                     .child("S"),
                             )
-                            .child(Label::new("Sonant")),
+                            .child(Label::new("Sonant"))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py(px(2.0))
+                                    .rounded(px(999.0))
+                                    .bg(colors.input_background)
+                                    .text_color(colors.muted_foreground)
+                                    .text_size(px(10.0))
+                                    .child(concat!("v", env!("CARGO_PKG_VERSION"))),
+                            ),
                     )
                     .child(
                         div()
@@ -1654,21 +1672,43 @@ impl Render for SonantMainWindow {
                             .child(
                                 div()
                                     .id("api-status-badge")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(radius.control)
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .px_3()
+                                    .py(px(4.0))
+                                    .rounded(px(999.0))
                                     .border_1()
                                     .border_color(colors.panel_border)
                                     .bg(colors.surface_background)
                                     .text_color(provider_status_color)
+                                    .child(
+                                        div()
+                                            .w(px(8.0))
+                                            .h(px(8.0))
+                                            .rounded(px(999.0))
+                                            .bg(provider_status_color),
+                                    )
                                     .child(provider_status_label),
                             )
                             .child(
-                                Button::new("settings-button")
-                                    .label("Settings")
+                                div()
+                                    .id("settings-button")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(radius.control)
+                                    .text_size(px(20.0))
+                                    .text_color(colors.muted_foreground)
+                                    .cursor_pointer()
+                                    .hover(|style| {
+                                        style
+                                            .text_color(colors.surface_foreground)
+                                            .bg(colors.input_background)
+                                    })
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.on_open_settings_clicked(window, cx)
-                                    })),
+                                    }))
+                                    .child("⚙"),
                             ),
                     ),
             )
