@@ -40,7 +40,7 @@ use super::utils::{
     log_generation_request_submission,
 };
 use super::{
-    DEFAULT_ANTHROPIC_MODEL, DEFAULT_BPM, DEFAULT_COMPLEXITY, DEFAULT_DENSITY,
+    BPM_MAX, BPM_MIN, DEFAULT_ANTHROPIC_MODEL, DEFAULT_BPM, DEFAULT_COMPLEXITY, DEFAULT_DENSITY,
     DEFAULT_OPENAI_COMPAT_MODEL, JOB_UPDATE_POLL_INTERVAL_MS, MIDI_SLOT_DROP_ERROR_MESSAGE,
     MIDI_SLOT_FILE_PICKER_PROMPT, MIDI_SLOT_UNSUPPORTED_FILE_MESSAGE, PROMPT_EDITOR_ROWS,
     PROMPT_PLACEHOLDER, PROMPT_VALIDATION_MESSAGE, SETTINGS_ANTHROPIC_API_KEY_PLACEHOLDER,
@@ -53,8 +53,6 @@ const LIVE_CAPTURE_MAX_EVENTS_PER_POLL: usize = 512;
 const PARAM_LEVEL_MIN: u8 = 1;
 const PARAM_LEVEL_MAX: u8 = 5;
 const PARAM_LEVEL_SPAN: u8 = PARAM_LEVEL_MAX - PARAM_LEVEL_MIN;
-const PARAM_BPM_MIN: u16 = 20;
-const PARAM_BPM_MAX: u16 = 300;
 const PARAM_KEY_OPTIONS: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
@@ -71,9 +69,7 @@ type DropdownState = SelectState<Vec<&'static str>>;
 
 fn parse_bpm_input_value(raw: &str) -> Option<u16> {
     let parsed = raw.trim().parse::<u16>().ok()?;
-    (PARAM_BPM_MIN..=PARAM_BPM_MAX)
-        .contains(&parsed)
-        .then_some(parsed)
+    (BPM_MIN..=BPM_MAX).contains(&parsed).then_some(parsed)
 }
 
 pub(super) struct SonantMainWindow {

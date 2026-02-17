@@ -21,6 +21,8 @@ const HELPER_WINDOW_HEIGHT: f32 = 640.0;
 const PROMPT_EDITOR_ROWS: usize = 5;
 const JOB_UPDATE_POLL_INTERVAL_MS: u64 = 50;
 
+const BPM_MIN: u16 = 20;
+const BPM_MAX: u16 = 300;
 const DEFAULT_BPM: u16 = 120;
 const DEFAULT_DENSITY: u8 = 3;
 const DEFAULT_COMPLEXITY: u8 = 3;
