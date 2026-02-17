@@ -1741,7 +1741,7 @@ impl Render for SonantMainWindow {
                                     .gap_2()
                                     .child(Self::section_label_with_info("Prompt", colors))
                                     .child(
-                                        div().w_full().child(
+                                        div().w_full().min_h(px(100.0)).child(
                                             Input::new(&self.prompt_input),
                                         ),
                                     )
