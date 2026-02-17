@@ -60,8 +60,8 @@ impl PluginGuiImpl for SonantPluginMainThread<'_> {
 
     fn get_size(&mut self) -> Option<GuiSize> {
         Some(GuiSize {
-            width: 640,
-            height: 420,
+            width: 800,
+            height: 640,
         })
     }
 
