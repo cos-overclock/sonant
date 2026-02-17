@@ -2002,10 +2002,6 @@ impl Render for SonantMainWindow {
                                                     let monitoring_on = is_live && self.recording_enabled_for_channel(live_ch);
                                                     let slot_error = self.midi_slot_error_for_row(slot, row_index).cloned();
                                                     let piano_roll_visible = !self.piano_roll_hidden_rows.contains(&row_index);
-                                                    let slot_has_file = {
-                                                        let refs = self.load_midi_use_case.snapshot_references();
-                                                        refs.iter().any(|r| r.slot == slot)
-                                                    };
                                                     // グレーアウト用の色（非表示行は薄く）
                                                     let row_slot_color = if piano_roll_visible { slot_color } else { slot_color.opacity(0.25) };
                                                     let row_fg = if piano_roll_visible { colors.surface_foreground } else { colors.muted_foreground.opacity(0.4) };
@@ -2174,27 +2170,7 @@ impl Render for SonantMainWindow {
                                                                         }))
                                                                         .child(if piano_roll_visible { "◉" } else { "◌" }),
                                                                 )
-                                                                // Clear file (file source with file loaded) — trash icon
-                                                                .when(!is_live && slot_has_file, |el| {
-                                                                    el.child(
-                                                                        div()
-                                                                            .id(("slot-clear", row_index))
-                                                                            .w(px(20.0))
-                                                                            .h(px(20.0))
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .justify_center()
-                                                                            .rounded(px(999.0))
-                                                                            .text_size(px(11.0))
-                                                                            .text_color(colors.muted_foreground)
-                                                                            .cursor_pointer()
-                                                                            .hover(|s| s.text_color(colors.error_foreground))
-                                                                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                                                                this.on_clear_midi_slot_clicked(slot, cx);
-                                                                            }))
-                                                                            .child("✕"),
-                                                                    )
-                                                                })
+
                                                                 // Remove track button — trash icon
                                                                 .child(
                                                                     div()
