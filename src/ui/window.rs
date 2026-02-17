@@ -1981,13 +1981,20 @@ impl Render for SonantMainWindow {
                                                         let refs = self.load_midi_use_case.snapshot_references();
                                                         refs.iter().any(|r| r.slot == slot)
                                                     };
+                                                    // グレーアウト用の色（非表示行は薄く）
+                                                    let row_slot_color = if piano_roll_visible { slot_color } else { slot_color.opacity(0.25) };
+                                                    let row_fg = if piano_roll_visible { colors.surface_foreground } else { colors.muted_foreground.opacity(0.4) };
 
                                                     div()
                                                         .id(("track-row", row_index))
                                                         .flex()
                                                         .items_center()
                                                         .h(px(40.0))
-                                                        .bg(colors.panel_background)
+                                                        .bg(if piano_roll_visible {
+                                                            colors.panel_background
+                                                        } else {
+                                                            colors.panel_background.opacity(0.4)
+                                                        })
                                                         .hover(|s| s.bg(colors.input_background))
                                                         .can_drop(move |value, _, _| {
                                                             !is_live
@@ -2019,7 +2026,7 @@ impl Render for SonantMainWindow {
                                                                 .w(px(6.0))
                                                                 .h_full()
                                                                 .flex_none()
-                                                                .bg(slot_color),
+                                                                .bg(row_slot_color),
                                                         )
                                                         // Source label + type badge (always clickable)
                                                         .child(
@@ -2037,7 +2044,7 @@ impl Render for SonantMainWindow {
                                                                         .min_w(px(0.0))
                                                                         .overflow_hidden()
                                                                         .text_size(px(11.0))
-                                                                        .text_color(colors.surface_foreground)
+                                                                        .text_color(row_fg)
                                                                         .cursor_pointer()
                                                                         .hover(|s| s.text_color(colors.primary))
                                                                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -2057,10 +2064,10 @@ impl Render for SonantMainWindow {
                                                                         .py(px(2.0))
                                                                         .rounded(px(4.0))
                                                                         .text_size(px(9.0))
-                                                                        .text_color(slot_color)
+                                                                        .text_color(row_slot_color)
                                                                         .font_weight(gpui::FontWeight::BOLD)
                                                                         .border_1()
-                                                                        .border_color(slot_color)
+                                                                        .border_color(row_slot_color)
                                                                         .child(short_label),
                                                                 ),
                                                         )
