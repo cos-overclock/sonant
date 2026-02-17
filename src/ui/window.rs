@@ -1727,9 +1727,9 @@ impl Render for SonantMainWindow {
                                             .child("Prompt drives `on_generate_clicked` with the selected mode and collected references."),
                                     )
                                     .child(
-                                        Input::new(&self.prompt_input)
-                                            .w_full()
-                                            .h(px(PROMPT_EDITOR_HEIGHT_PX)),
+                                        div().w_full().h(px(PROMPT_EDITOR_HEIGHT_PX)).child(
+                                            Input::new(&self.prompt_input),
+                                        ),
                                     )
                                     .children(self.validation_error.iter().map(|message| {
                                         div()
@@ -1738,9 +1738,10 @@ impl Render for SonantMainWindow {
                                     }))
                                     .child(Label::new("Generation Mode"))
                                     .child(
-                                        Select::new(&self.generation_mode_dropdown)
-                                            .w_full()
-                                            .placeholder("Select generation mode"),
+                                        div().w_full().h(px(36.0)).child(
+                                            Select::new(&self.generation_mode_dropdown)
+                                                .placeholder("Select generation mode"),
+                                        ),
                                     )
                                     .child(
                                         div()
@@ -1776,7 +1777,11 @@ impl Render for SonantMainWindow {
                                             .child(format!("AI Model: {saved_default_model}")),
                                     )
                                     .child(Label::new("API Key (testing)"))
-                                    .child(Input::new(&self.api_key_input).w_full().mask_toggle())
+                                    .child(
+                                        div().w_full().h(px(36.0)).child(
+                                            Input::new(&self.api_key_input).mask_toggle(),
+                                        ),
+                                    )
                                     .children(self.api_key_error.iter().map(|message| {
                                         div()
                                             .text_color(colors.error_foreground)
@@ -1803,9 +1808,10 @@ impl Render for SonantMainWindow {
                                     )
                                     .child(Label::new("Reference Slot"))
                                     .child(
-                                        Select::new(&self.reference_slot_dropdown)
-                                            .w_full()
-                                            .placeholder("Select reference slot"),
+                                        div().w_full().h(px(36.0)).child(
+                                            Select::new(&self.reference_slot_dropdown)
+                                                .placeholder("Select reference slot"),
+                                        ),
                                     )
                                     .child(
                                         div()
@@ -1814,9 +1820,10 @@ impl Render for SonantMainWindow {
                                     )
                                     .child(Label::new("Source"))
                                     .child(
-                                        Select::new(&self.reference_source_dropdown)
-                                            .w_full()
-                                            .placeholder("Select source"),
+                                        div().w_full().h(px(36.0)).child(
+                                            Select::new(&self.reference_source_dropdown)
+                                                .placeholder("Select source"),
+                                        ),
                                     )
                                     .child(
                                         div()
