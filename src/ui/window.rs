@@ -507,18 +507,6 @@ impl SonantMainWindow {
         }
     }
 
-    fn on_bpm_step_clicked(&mut self, delta: i16, window: &mut Window, cx: &mut Context<Self>) {
-        let current = i32::from(self.submission_model.bpm());
-        let clamped =
-            (current + i32::from(delta)).clamp(i32::from(PARAM_BPM_MIN), i32::from(PARAM_BPM_MAX));
-        let next = u16::try_from(clamped).unwrap_or(PARAM_BPM_MIN);
-        if next != self.submission_model.bpm() {
-            self.submission_model.set_bpm(next);
-            self.sync_bpm_input_from_model(window, cx);
-            cx.notify();
-        }
-    }
-
     fn on_complexity_slider_event(
         &mut self,
         _state: &Entity<SliderState>,
@@ -2952,27 +2940,13 @@ impl Render for SonantMainWindow {
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap_2()
+                                            .gap_1()
                                             .child(
                                                 div()
                                                     .w(px(120.0))
                                                     .h(px(36.0))
                                                     .child(Input::new(&self.bpm_input)),
-                                            )
-                                            .child(
-                                                Button::new("param-bpm-decrement")
-                                                    .label("-")
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.on_bpm_step_clicked(-1, window, cx)
-                                                    })),
                                             ),
-                                    )
-                                    .child(
-                                        Button::new("param-bpm-increment")
-                                            .label("+")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.on_bpm_step_clicked(1, window, cx)
-                                            })),
                                     ),
                             )
                             .child(
