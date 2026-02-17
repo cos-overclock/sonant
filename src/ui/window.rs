@@ -1846,6 +1846,7 @@ impl Render for SonantMainWindow {
                                                     .gap_1()
                                                     .child(live_channel_button_row(1, 8))
                                                     .child(live_channel_button_row(9, 16))
+                                                    .child("* Channels marked with * are already assigned to another slot")
                                             }),
                                     )
                                     .child(
