@@ -829,6 +829,7 @@ impl SonantMainWindow {
 
         div()
             .id("piano-roll-grid-frame")
+            .occlude()
             .flex_1()
             .rounded(corner_radius)
             .bg(colors.surface_background)
