@@ -71,6 +71,7 @@ const PIANO_ROLL_BEAT_WIDTH: f32 = 40.0;
 const PIANO_ROLL_BEAT_COLUMNS: usize = 64;
 const PIANO_ROLL_TOP_MIDI_NOTE: i16 = 84; // C6
 const PIANO_ROLL_BOTTOM_MIDI_NOTE: i16 = 36; // C2
+const PIANO_ROLL_VIEWPORT_HEIGHT: f32 = 320.0;
 type DropdownState = SelectState<Vec<&'static str>>;
 
 fn parse_bpm_input_value(raw: &str) -> Option<u16> {
@@ -3094,8 +3095,8 @@ impl Render for SonantMainWindow {
                             .child(
                                 div()
                                     .id("piano-roll-panel")
-                                    .flex_1()
-                                    .min_h(px(260.0))
+                                    .flex_none()
+                                    .h(px(PIANO_ROLL_VIEWPORT_HEIGHT))
                                     .flex()
                                     .flex_col()
                                     .bg(colors.surface_background)
