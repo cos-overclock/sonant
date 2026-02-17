@@ -12,6 +12,7 @@ use cocoa::{
 mod backend;
 mod request;
 mod state;
+mod theme;
 mod utils;
 mod window;
 
@@ -59,6 +60,7 @@ pub(crate) fn run_gpui_helper() {
     Application::new().run(|cx: &mut App| {
         set_plugin_helper_activation_policy();
         gpui_component::init(cx);
+        theme::apply_default_theme(cx);
 
         let bounds = Bounds::centered(
             None,
