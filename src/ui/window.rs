@@ -1743,7 +1743,7 @@ impl Render for SonantMainWindow {
                                     .child(
                                         div()
                                             .w_full()
-                                            .min_h(px(100.0))
+                                            .min_h(px(96.0))
                                             .flex()
                                             .flex_col()
                                             .child(Input::new(&self.prompt_input).h_full()),
