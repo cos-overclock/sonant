@@ -1265,7 +1265,7 @@ impl SonantMainWindow {
                                     .id("piano-roll-key-label-viewport")
                                     .flex_1()
                                     .track_scroll(vertical_scroll_handle)
-                                    .overflow_scroll()
+                                    .overflow_y_scroll()
                                     .child(
                                         div()
                                             .id("piano-roll-key-label-canvas")
@@ -1306,8 +1306,9 @@ impl SonantMainWindow {
                             .id("piano-roll-main-grid-scroll")
                             .flex_1()
                             .h_full()
+                            .relative()
                             .track_scroll(horizontal_scroll_handle)
-                            .overflow_scroll()
+                            .overflow_x_scroll()
                             .scrollbar_width(px(8.0))
                             .horizontal_scrollbar(horizontal_scroll_handle)
                             .child(
@@ -1368,8 +1369,9 @@ impl SonantMainWindow {
                                         div()
                                             .id("piano-roll-beat-grid-viewport")
                                             .flex_1()
+                                            .relative()
                                             .track_scroll(vertical_scroll_handle)
-                                            .overflow_scroll()
+                                            .overflow_y_scroll()
                                             .scrollbar_width(px(8.0))
                                             .vertical_scrollbar(vertical_scroll_handle)
                                             .child(
