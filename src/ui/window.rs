@@ -1266,6 +1266,10 @@ impl SonantMainWindow {
                                     .flex_1()
                                     .track_scroll(vertical_scroll_handle)
                                     .overflow_y_scroll()
+                                    .map(|mut this| {
+                                        this.style().restrict_scroll_to_axis = Some(true);
+                                        this
+                                    })
                                     .child(
                                         div()
                                             .id("piano-roll-key-label-canvas")
@@ -1309,6 +1313,10 @@ impl SonantMainWindow {
                             .relative()
                             .track_scroll(horizontal_scroll_handle)
                             .overflow_x_scroll()
+                            .map(|mut this| {
+                                this.style().restrict_scroll_to_axis = Some(true);
+                                this
+                            })
                             .scrollbar_width(px(8.0))
                             .horizontal_scrollbar(horizontal_scroll_handle)
                             .child(
@@ -1372,6 +1380,10 @@ impl SonantMainWindow {
                                             .relative()
                                             .track_scroll(vertical_scroll_handle)
                                             .overflow_y_scroll()
+                                            .map(|mut this| {
+                                                this.style().restrict_scroll_to_axis = Some(true);
+                                                this
+                                            })
                                             .scrollbar_width(px(8.0))
                                             .vertical_scrollbar(vertical_scroll_handle)
                                             .child(
