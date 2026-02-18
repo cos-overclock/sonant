@@ -8,6 +8,7 @@ pub(super) struct ThemeColors {
     pub(super) surface_foreground: Hsla,
     pub(super) panel_background: Hsla,
     pub(super) piano_roll_grid_line: Hsla,
+    pub(super) piano_roll_playhead: Hsla,
     pub(super) input_background: Hsla,
     pub(super) panel_border: Hsla,
     pub(super) panel_active_background: Hsla,
@@ -42,6 +43,9 @@ pub(super) struct ThemeColors {
     pub(super) glow_orange: Hsla,
     #[allow(dead_code)]
     pub(super) glow_cyan: Hsla,
+    #[allow(dead_code)]
+    pub(super) glow_pink: Hsla,
+    pub(super) glow_playhead: Hsla,
 }
 
 impl ThemeColors {
@@ -116,6 +120,7 @@ impl Default for SonantTheme {
                 surface_foreground: rgb(0xf9fafb).into(),
                 panel_background: rgb(0x161b2e).into(),
                 piano_roll_grid_line: rgb(0x1d233b).into(),
+                piano_roll_playhead: rgb(0xeab308).into(),
                 input_background: rgb(0x1d233b).into(),
                 panel_border: rgb(0x2a3254).into(),
                 panel_active_background: rgb(0x1d233b).into(),
@@ -144,6 +149,8 @@ impl Default for SonantTheme {
                 glow_red: rgb(0xef4444).into(),
                 glow_orange: rgb(0xf97316).into(),
                 glow_cyan: rgb(0x06b6d4).into(),
+                glow_pink: rgb(0xec4899).into(),
+                glow_playhead: rgb(0xeab308).into(),
             },
             typography: ThemeTypography {
                 font_family: ".SystemUIFont".into(),
