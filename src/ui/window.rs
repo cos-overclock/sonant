@@ -3064,30 +3064,67 @@ impl Render for SonantMainWindow {
                                     .flex_none()
                                     .flex()
                                     .items_center()
-                                    .gap_1()
-                                    .pr(spacing.panel_compact_padding)
+                                    .gap(px(8.0))
+                                    .px(spacing.panel_compact_padding)
                                     .rounded(radius.panel)
                                     .bg(colors.surface_background)
                                     .child(
-                                        div()
-                                            .w(px(96.0))
-                                            .h(px(36.0))
-                                            .child(Select::new(&self.key_dropdown).placeholder("Key")),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(184.0))
-                                            .h(px(36.0))
-                                            .child(Select::new(&self.scale_dropdown).placeholder("Scale")),
-                                    )
-                                    .child(div().w(px(1.0)).h(px(24.0)).bg(colors.panel_border))
-                                    .child(
+                                        // KEY group
                                         div()
                                             .flex()
                                             .items_center()
+                                            .gap(px(6.0))
                                             .child(
                                                 div()
-                                                    .w(px(96.0))
+                                                    .text_size(px(11.0))
+                                                    .text_color(colors.muted_foreground)
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .child("KEY"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(80.0))
+                                                    .h(px(36.0))
+                                                    .child(Select::new(&self.key_dropdown).placeholder("Key")),
+                                            ),
+                                    )
+                                    .child(
+                                        // SCALE group
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.0))
+                                                    .text_color(colors.muted_foreground)
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .child("SCALE"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(168.0))
+                                                    .h(px(36.0))
+                                                    .child(Select::new(&self.scale_dropdown).placeholder("Scale")),
+                                            ),
+                                    )
+                                    .child(div().w(px(1.0)).h(px(24.0)).bg(colors.panel_border))
+                                    .child(
+                                        // BPM group
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.0))
+                                                    .text_color(colors.muted_foreground)
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .child("BPM"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(80.0))
                                                     .h(px(36.0))
                                                     .child(Input::new(&self.bpm_input)),
                                             ),
