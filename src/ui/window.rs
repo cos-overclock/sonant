@@ -87,6 +87,20 @@ struct PianoRollNoteRect {
     width: f32,
     height: f32,
     is_preview: bool,
+    color: Option<Hsla>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParsedNoteEventKind {
+    NoteOn,
+    NoteOff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedReferenceNoteEvent {
+    channel: u8,
+    pitch: u8,
+    kind: ParsedNoteEventKind,
 }
 
 fn parse_bpm_input_value(raw: &str) -> Option<u16> {
@@ -878,16 +892,152 @@ impl SonantMainWindow {
         (playhead_ppq.max(0.0) as f32 * PIANO_ROLL_BEAT_WIDTH).clamp(0.0, max_x)
     }
 
-    fn candidate_ticks_per_beat(candidate: &GenerationCandidate) -> f32 {
-        const COMMON_TICKS_PER_BEAT: [f32; 5] = [96.0, 120.0, 240.0, 480.0, 960.0];
+    fn parse_decimal_after_marker(text: &str, marker: &str) -> Option<u32> {
+        let start = text.find(marker)? + marker.len();
+        let tail = &text[start..];
+        let digits: String = tail.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            None
+        } else {
+            digits.parse::<u32>().ok()
+        }
+    }
 
-        let total_beats = usize::from(candidate.bars.max(1)) * PIANO_ROLL_BEATS_PER_BAR;
-        let max_end_tick = candidate
-            .notes
-            .iter()
-            .map(|note| note.start_tick.saturating_add(note.duration_tick))
-            .max()
-            .unwrap_or(0);
+    fn parse_hex_after_marker(text: &str, marker: &str) -> Option<u8> {
+        let start = text.find(marker)? + marker.len();
+        let tail = &text[start..];
+        let digits: String = tail
+            .chars()
+            .take_while(|ch| ch.is_ascii_hexdigit())
+            .collect();
+        if digits.is_empty() {
+            None
+        } else {
+            u8::from_str_radix(&digits, 16).ok()
+        }
+    }
+
+    fn parse_midi_debug_field(text: &str, field: &str) -> Option<u8> {
+        for marker in [
+            format!("{field}: u4("),
+            format!("{field}: u7("),
+            format!("{field}: "),
+            format!("{field}="),
+        ] {
+            if let Some(value) = Self::parse_decimal_after_marker(text, &marker)
+                && let Ok(value) = u8::try_from(value)
+            {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    fn parse_reference_note_event(event: &MidiReferenceEvent) -> Option<ParsedReferenceNoteEvent> {
+        let payload = event.event.as_str();
+        if payload.starts_with("LiveMidi ") {
+            let status = Self::parse_hex_after_marker(payload, "status=0x")?;
+            let pitch = Self::parse_decimal_after_marker(payload, "data1=")
+                .and_then(|value| u8::try_from(value).ok())?;
+            let velocity = Self::parse_decimal_after_marker(payload, "data2=")
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(0);
+            let channel = Self::parse_decimal_after_marker(payload, "channel=")
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or((status & 0x0F) + 1)
+                .clamp(1, 16);
+
+            let kind = match status & 0xF0 {
+                0x90 if velocity > 0 => ParsedNoteEventKind::NoteOn,
+                0x80 | 0x90 => ParsedNoteEventKind::NoteOff,
+                _ => return None,
+            };
+
+            return Some(ParsedReferenceNoteEvent {
+                channel,
+                pitch,
+                kind,
+            });
+        }
+
+        if !payload.contains("NoteOn") && !payload.contains("NoteOff") {
+            return None;
+        }
+
+        let pitch = Self::parse_midi_debug_field(payload, "key")?;
+        let raw_channel = Self::parse_midi_debug_field(payload, "channel").unwrap_or(0);
+        let channel = raw_channel.saturating_add(1).clamp(1, 16);
+
+        let kind = if payload.contains("NoteOff") {
+            ParsedNoteEventKind::NoteOff
+        } else {
+            let velocity = Self::parse_midi_debug_field(payload, "vel").unwrap_or(0);
+            if velocity > 0 {
+                ParsedNoteEventKind::NoteOn
+            } else {
+                ParsedNoteEventKind::NoteOff
+            }
+        };
+
+        Some(ParsedReferenceNoteEvent {
+            channel,
+            pitch,
+            kind,
+        })
+    }
+
+    fn collect_reference_generated_notes(reference: &MidiReferenceSummary) -> Vec<GeneratedNote> {
+        let mut notes = Vec::new();
+        let mut active: std::collections::HashMap<(u16, u8, u8), Vec<u32>> =
+            std::collections::HashMap::new();
+
+        for event in &reference.events {
+            let Some(parsed) = Self::parse_reference_note_event(event) else {
+                continue;
+            };
+            let key = (event.track, parsed.channel, parsed.pitch);
+
+            match parsed.kind {
+                ParsedNoteEventKind::NoteOn => {
+                    active.entry(key).or_default().push(event.absolute_tick);
+                }
+                ParsedNoteEventKind::NoteOff => {
+                    if let Some(starts) = active.get_mut(&key)
+                        && let Some(start_tick) = starts.pop()
+                    {
+                        notes.push(GeneratedNote {
+                            pitch: parsed.pitch,
+                            start_tick,
+                            duration_tick: event.absolute_tick.saturating_sub(start_tick).max(1),
+                            velocity: 100,
+                            channel: parsed.channel,
+                        });
+                        if starts.is_empty() {
+                            active.remove(&key);
+                        }
+                    }
+                }
+            }
+        }
+
+        for ((_, channel, pitch), starts) in active {
+            for start_tick in starts {
+                notes.push(GeneratedNote {
+                    pitch,
+                    start_tick,
+                    duration_tick: PIANO_ROLL_FALLBACK_TICKS_PER_BEAT as u32,
+                    velocity: 80,
+                    channel,
+                });
+            }
+        }
+
+        notes.sort_by_key(|note| (note.start_tick, note.pitch));
+        notes
+    }
+
+    fn estimate_ticks_per_beat(total_beats: usize, max_end_tick: u32) -> f32 {
+        const COMMON_TICKS_PER_BEAT: [f32; 5] = [96.0, 120.0, 240.0, 480.0, 960.0];
 
         if total_beats == 0 || max_end_tick == 0 {
             return PIANO_ROLL_FALLBACK_TICKS_PER_BEAT;
@@ -899,13 +1049,33 @@ impl SonantMainWindow {
         }
 
         let mut nearest = COMMON_TICKS_PER_BEAT[0];
-        for candidate_ticks_per_beat in COMMON_TICKS_PER_BEAT {
-            if (estimated - candidate_ticks_per_beat).abs() < (estimated - nearest).abs() {
-                nearest = candidate_ticks_per_beat;
+        for ticks_per_beat in COMMON_TICKS_PER_BEAT {
+            if (estimated - ticks_per_beat).abs() < (estimated - nearest).abs() {
+                nearest = ticks_per_beat;
             }
         }
-
         nearest
+    }
+
+    fn candidate_ticks_per_beat(candidate: &GenerationCandidate) -> f32 {
+        let total_beats = usize::from(candidate.bars.max(1)) * PIANO_ROLL_BEATS_PER_BAR;
+        let max_end_tick = candidate
+            .notes
+            .iter()
+            .map(|note| note.start_tick.saturating_add(note.duration_tick))
+            .max()
+            .unwrap_or(0);
+        Self::estimate_ticks_per_beat(total_beats, max_end_tick)
+    }
+
+    fn reference_ticks_per_beat(reference: &MidiReferenceSummary, notes: &[GeneratedNote]) -> f32 {
+        let total_beats = usize::from(reference.bars.max(1)) * PIANO_ROLL_BEATS_PER_BAR;
+        let max_end_tick = notes
+            .iter()
+            .map(|note| note.start_tick.saturating_add(note.duration_tick))
+            .max()
+            .unwrap_or(0);
+        Self::estimate_ticks_per_beat(total_beats, max_end_tick)
     }
 
     fn piano_roll_note_rect(
@@ -946,10 +1116,53 @@ impl SonantMainWindow {
             width,
             height,
             is_preview,
+            color: None,
         })
     }
 
-    fn piano_roll_note_rects(
+    fn visible_reference_slots(
+        visible_slot_rows: &[ReferenceSlot],
+        piano_roll_hidden_rows: &std::collections::HashSet<usize>,
+    ) -> std::collections::HashSet<ReferenceSlot> {
+        visible_slot_rows
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(row_index, slot)| {
+                (!piano_roll_hidden_rows.contains(&row_index)).then_some(slot)
+            })
+            .collect()
+    }
+
+    fn piano_roll_reference_note_rects(
+        references: &[MidiReferenceSummary],
+        visible_slot_rows: &[ReferenceSlot],
+        piano_roll_hidden_rows: &std::collections::HashSet<usize>,
+        colors: ThemeColors,
+    ) -> Vec<PianoRollNoteRect> {
+        let visible_slots =
+            Self::visible_reference_slots(visible_slot_rows, piano_roll_hidden_rows);
+        let mut note_rects = Vec::new();
+
+        for reference in references {
+            if !visible_slots.contains(&reference.slot) {
+                continue;
+            }
+
+            let slot_color = colors.slot_color(reference.slot);
+            let notes = Self::collect_reference_generated_notes(reference);
+            let ticks_per_beat = Self::reference_ticks_per_beat(reference, &notes);
+            note_rects.extend(notes.iter().filter_map(|note| {
+                let mut rect = Self::piano_roll_note_rect(note, ticks_per_beat, true)?;
+                rect.color = Some(slot_color);
+                Some(rect)
+            }));
+        }
+
+        note_rects
+    }
+
+    fn piano_roll_candidate_note_rects(
         candidates: &[GenerationCandidate],
         selected_candidate_index: Option<usize>,
         hidden_candidates: &std::collections::HashSet<usize>,
@@ -972,6 +1185,29 @@ impl SonantMainWindow {
             }
         }
 
+        note_rects
+    }
+
+    fn piano_roll_note_rects(
+        references: &[MidiReferenceSummary],
+        visible_slot_rows: &[ReferenceSlot],
+        piano_roll_hidden_rows: &std::collections::HashSet<usize>,
+        candidates: &[GenerationCandidate],
+        selected_candidate_index: Option<usize>,
+        hidden_candidates: &std::collections::HashSet<usize>,
+        colors: ThemeColors,
+    ) -> Vec<PianoRollNoteRect> {
+        let mut note_rects = Self::piano_roll_reference_note_rects(
+            references,
+            visible_slot_rows,
+            piano_roll_hidden_rows,
+            colors,
+        );
+        note_rects.extend(Self::piano_roll_candidate_note_rects(
+            candidates,
+            selected_candidate_index,
+            hidden_candidates,
+        ));
         note_rects
     }
 
@@ -1189,15 +1425,29 @@ impl SonantMainWindow {
                                                     ))
                                                     .children(note_rects.into_iter().enumerate().map(
                                                         |(index, note)| {
+                                                            let resolved_note_color =
+                                                                note.color.unwrap_or(note_color);
                                                             let note_fill = if note.is_preview {
-                                                                colors.surface_foreground.opacity(0.05)
+                                                                note.color
+                                                                    .map(|color| color.opacity(0.16))
+                                                                    .unwrap_or_else(|| {
+                                                                        colors
+                                                                            .surface_foreground
+                                                                            .opacity(0.05)
+                                                                    })
                                                             } else {
-                                                                note_color.opacity(0.4)
+                                                                resolved_note_color.opacity(0.4)
                                                             };
                                                             let note_border = if note.is_preview {
-                                                                colors.surface_foreground.opacity(0.12)
+                                                                note.color
+                                                                    .map(|color| color.opacity(0.45))
+                                                                    .unwrap_or_else(|| {
+                                                                        colors
+                                                                            .surface_foreground
+                                                                            .opacity(0.12)
+                                                                    })
                                                             } else {
-                                                                note_color.opacity(0.72)
+                                                                resolved_note_color.opacity(0.72)
                                                             };
 
                                                             let base = div()
@@ -2395,9 +2645,13 @@ impl Render for SonantMainWindow {
         let piano_roll_note_color = colors.slot_color(generated_slot);
         let piano_roll_note_glow_color = Self::slot_glow_color(colors, generated_slot);
         let piano_roll_note_rects = Self::piano_roll_note_rects(
+            &generation_references,
+            &self.visible_slot_rows,
+            &self.piano_roll_hidden_rows,
             &self.generation_candidates,
             self.selected_candidate_index,
             &self.hidden_candidates,
+            colors,
         );
 
         div()
@@ -3575,7 +3829,7 @@ mod tests {
     use sonant::app::{ChannelMapping, InputTrackModel, LiveInputEvent, MidiInputRouter};
     use sonant::domain::{
         GeneratedNote, GenerationCandidate, GenerationMode, GenerationParams, GenerationRequest,
-        ModelRef, ReferenceSlot, ReferenceSource,
+        MidiReferenceEvent, MidiReferenceSummary, ModelRef, ReferenceSlot, ReferenceSource,
     };
 
     #[test]
@@ -3975,8 +4229,16 @@ mod tests {
         ];
 
         let hidden = std::collections::HashSet::new();
-        let note_rects =
-            super::SonantMainWindow::piano_roll_note_rects(&candidates, Some(0), &hidden);
+        let hidden_rows = std::collections::HashSet::new();
+        let note_rects = super::SonantMainWindow::piano_roll_note_rects(
+            &[],
+            &[],
+            &hidden_rows,
+            &candidates,
+            Some(0),
+            &hidden,
+            super::SonantTheme::default().colors,
+        );
 
         assert_eq!(note_rects.len(), 2);
         assert_eq!(note_rects.iter().filter(|note| note.is_preview).count(), 1);
@@ -4025,11 +4287,65 @@ mod tests {
         ];
 
         let hidden = std::collections::HashSet::from([0usize]);
-        let note_rects =
-            super::SonantMainWindow::piano_roll_note_rects(&candidates, Some(0), &hidden);
+        let hidden_rows = std::collections::HashSet::new();
+        let note_rects = super::SonantMainWindow::piano_roll_note_rects(
+            &[],
+            &[],
+            &hidden_rows,
+            &candidates,
+            Some(0),
+            &hidden,
+            super::SonantTheme::default().colors,
+        );
 
         assert_eq!(note_rects.len(), 1);
         assert!(note_rects[0].is_preview);
+    }
+
+    #[test]
+    fn piano_roll_note_rects_include_loaded_file_reference_events() {
+        let references = vec![MidiReferenceSummary {
+            slot: ReferenceSlot::Melody,
+            source: ReferenceSource::File,
+            file: None,
+            bars: 4,
+            note_count: 1,
+            density_hint: 0.1,
+            min_pitch: 60,
+            max_pitch: 60,
+            events: vec![
+                MidiReferenceEvent {
+                    track: 0,
+                    absolute_tick: 0,
+                    delta_tick: 0,
+                    event: "Midi { channel: u4(0), message: NoteOn { key: u7(60), vel: u7(100) } }"
+                        .to_string(),
+                },
+                MidiReferenceEvent {
+                    track: 0,
+                    absolute_tick: 240,
+                    delta_tick: 240,
+                    event: "Midi { channel: u4(0), message: NoteOff { key: u7(60), vel: u7(0) } }"
+                        .to_string(),
+                },
+            ],
+        }];
+
+        let hidden_rows = std::collections::HashSet::new();
+        let hidden_candidates = std::collections::HashSet::new();
+        let note_rects = super::SonantMainWindow::piano_roll_note_rects(
+            &references,
+            &[ReferenceSlot::Melody],
+            &hidden_rows,
+            &[],
+            None,
+            &hidden_candidates,
+            super::SonantTheme::default().colors,
+        );
+
+        assert_eq!(note_rects.len(), 1);
+        assert!(note_rects[0].is_preview);
+        assert!(note_rects[0].color.is_some());
     }
 
     #[test]
