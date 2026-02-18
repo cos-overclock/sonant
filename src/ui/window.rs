@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use gpui::{
     App, AppContext, Context, Entity, ExternalPaths, IntoElement, PathPromptOptions, Pixels,
-    Render, Subscription, Task, Timer, Window, div, prelude::*, px,
+    Render, ScrollHandle, Subscription, Task, Timer, Window, div, prelude::*, px,
 };
 use gpui_component::{
     Disableable,
@@ -120,6 +120,8 @@ pub(super) struct SonantMainWindow {
     selected_generation_mode: GenerationMode,
     visible_slot_rows: Vec<ReferenceSlot>,
     piano_roll_hidden_rows: std::collections::HashSet<usize>,
+    piano_roll_vertical_scroll_handle: ScrollHandle,
+    piano_roll_horizontal_scroll_handle: ScrollHandle,
     add_track_menu_open: bool,
     channel_menu_open: Option<usize>, // row_index of the row whose channel menu is open
     slot_type_menu_open: Option<usize>, // row_index of the row whose slot-type menu is open
@@ -283,6 +285,8 @@ impl SonantMainWindow {
             selected_generation_mode: GenerationMode::Melody,
             visible_slot_rows: vec![],
             piano_roll_hidden_rows: std::collections::HashSet::new(),
+            piano_roll_vertical_scroll_handle: ScrollHandle::new(),
+            piano_roll_horizontal_scroll_handle: ScrollHandle::new(),
             add_track_menu_open: false,
             channel_menu_open: None,
             slot_type_menu_open: None,
@@ -823,9 +827,17 @@ impl SonantMainWindow {
         Some(format!("{note_name}{octave}"))
     }
 
-    fn piano_roll_grid(colors: ThemeColors, corner_radius: Pixels) -> impl IntoElement {
+    fn piano_roll_grid(
+        colors: ThemeColors,
+        corner_radius: Pixels,
+        vertical_scroll_handle: &ScrollHandle,
+        horizontal_scroll_handle: &ScrollHandle,
+    ) -> impl IntoElement {
         let grid_width = PIANO_ROLL_BEAT_COLUMNS as f32 * PIANO_ROLL_BEAT_WIDTH;
-        let canvas_width = PIANO_ROLL_KEY_LABEL_WIDTH + grid_width;
+        let midi_notes: Vec<i16> = (PIANO_ROLL_BOTTOM_MIDI_NOTE..=PIANO_ROLL_TOP_MIDI_NOTE)
+            .rev()
+            .collect();
+        let label_notes = midi_notes.clone();
 
         div()
             .id("piano-roll-grid-frame")
@@ -833,38 +845,40 @@ impl SonantMainWindow {
             .flex_1()
             .rounded(corner_radius)
             .bg(colors.surface_background)
-            .overflow_scroll()
-            .scrollbar_width(px(8.0))
+            .overflow_hidden()
             .child(
                 div()
-                    .id("piano-roll-grid-canvas")
-                    .w(px(canvas_width))
+                    .id("piano-roll-grid-layout")
+                    .size_full()
                     .flex()
-                    .flex_col()
-                    .children(
-                        (PIANO_ROLL_BOTTOM_MIDI_NOTE..=PIANO_ROLL_TOP_MIDI_NOTE)
-                            .rev()
-                            .map(|midi_note| {
-                                let note_label =
-                                    Self::piano_roll_note_label(midi_note).unwrap_or_default();
-                                let has_label = !note_label.is_empty();
-
+                    .child(
+                        div()
+                            .id("piano-roll-key-label-viewport")
+                            .w(px(PIANO_ROLL_KEY_LABEL_WIDTH))
+                            .h_full()
+                            .flex_none()
+                            .track_scroll(vertical_scroll_handle)
+                            .overflow_scroll()
+                            .child(
                                 div()
-                                    .h(px(PIANO_ROLL_ROW_HEIGHT))
-                                    .flex_none()
+                                    .id("piano-roll-key-label-canvas")
+                                    .w(px(PIANO_ROLL_KEY_LABEL_WIDTH))
                                     .flex()
-                                    .items_center()
-                                    .border_b_1()
-                                    .border_color(colors.piano_roll_grid_line)
-                                    .child(
+                                    .flex_col()
+                                    .children(label_notes.into_iter().map(|midi_note| {
+                                        let note_label = Self::piano_roll_note_label(midi_note)
+                                            .unwrap_or_default();
+                                        let has_label = !note_label.is_empty();
+
                                         div()
-                                            .w(px(PIANO_ROLL_KEY_LABEL_WIDTH))
-                                            .h_full()
+                                            .h(px(PIANO_ROLL_ROW_HEIGHT))
                                             .flex_none()
-                                            .bg(colors.panel_background)
-                                            .pr(px(6.0))
                                             .flex()
                                             .items_center()
+                                            .border_b_1()
+                                            .border_color(colors.piano_roll_grid_line)
+                                            .bg(colors.panel_background)
+                                            .pr(px(6.0))
                                             .justify_end()
                                             .text_size(px(10.0))
                                             .text_color(if has_label {
@@ -872,28 +886,64 @@ impl SonantMainWindow {
                                             } else {
                                                 colors.muted_foreground.opacity(0.35)
                                             })
-                                            .child(note_label),
-                                    )
+                                            .child(note_label)
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("piano-roll-beat-grid-horizontal-scroll")
+                            .flex_1()
+                            .h_full()
+                            .track_scroll(horizontal_scroll_handle)
+                            .overflow_scroll()
+                            .scrollbar_width(px(8.0))
+                            .horizontal_scrollbar(horizontal_scroll_handle)
+                            .child(
+                                div()
+                                    .id("piano-roll-beat-grid-viewport")
+                                    .w(px(grid_width))
+                                    .h_full()
+                                    .track_scroll(vertical_scroll_handle)
+                                    .overflow_scroll()
+                                    .scrollbar_width(px(8.0))
+                                    .vertical_scrollbar(vertical_scroll_handle)
                                     .child(
                                         div()
-                                            .h_full()
+                                            .id("piano-roll-beat-grid-canvas")
+                                            .w(px(grid_width))
                                             .flex()
-                                            .flex_1()
-                                            .bg(if Self::piano_roll_is_black_key(midi_note) {
-                                                colors.surface_foreground.opacity(0.05)
-                                            } else {
-                                                colors.surface_background.opacity(0.0)
-                                            })
-                                            .children((0..PIANO_ROLL_BEAT_COLUMNS).map(|_| {
+                                            .flex_col()
+                                            .children(midi_notes.into_iter().map(|midi_note| {
                                                 div()
-                                                    .h_full()
-                                                    .w(px(PIANO_ROLL_BEAT_WIDTH))
+                                                    .h(px(PIANO_ROLL_ROW_HEIGHT))
                                                     .flex_none()
-                                                    .border_l_1()
+                                                    .flex()
+                                                    .border_b_1()
                                                     .border_color(colors.piano_roll_grid_line)
+                                                    .bg(
+                                                        if Self::piano_roll_is_black_key(midi_note)
+                                                        {
+                                                            colors.surface_foreground.opacity(0.05)
+                                                        } else {
+                                                            colors.surface_background.opacity(0.0)
+                                                        },
+                                                    )
+                                                    .children((0..PIANO_ROLL_BEAT_COLUMNS).map(
+                                                        |_| {
+                                                            div()
+                                                                .h_full()
+                                                                .w(px(PIANO_ROLL_BEAT_WIDTH))
+                                                                .flex_none()
+                                                                .border_l_1()
+                                                                .border_color(
+                                                                    colors.piano_roll_grid_line,
+                                                                )
+                                                        },
+                                                    ))
                                             })),
-                                    )
-                            }),
+                                    ),
+                            ),
                     ),
             )
     }
@@ -3138,7 +3188,12 @@ impl Render for SonantMainWindow {
                                     .flex()
                                     .flex_col()
                                     .bg(colors.surface_background)
-                                    .child(Self::piano_roll_grid(colors, radius.control)),
+                                    .child(Self::piano_roll_grid(
+                                        colors,
+                                        radius.control,
+                                        &self.piano_roll_vertical_scroll_handle,
+                                        &self.piano_roll_horizontal_scroll_handle,
+                                    )),
                             )
                             .child(
                                 div()
